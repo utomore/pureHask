@@ -1,0 +1,27 @@
+# Cabal build directory
+dist-newstyle/
+
+# Local Cabal configurations (contains user-specific paths)
+cabal.project.local
+cabal.project.local~
+cabal.project.local.lock
+cabal.sandbox.config
+.cabal-sandbox/
+
+# GHC compilation files
+*.o
+*.hi
+*.dyn_o
+*.dyn_hi
+*.chi
+*.chs.h
+
+# OS / Editor specific
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*~
+
+# Executables
+*.exe

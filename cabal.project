@@ -1,0 +1,7 @@
+packages:
+  .
+  aeson-2.2.4.0
+
+constraints:
+  some < 1.0.1,
+  semialign < 1.3
