@@ -1,0 +1,10 @@
+;; A talk quest: complete by speaking to the elder (E key).
+
+(quest meet-elder
+  (name "MEET THE ELDER")
+  (auto-start)
+  (stage talk
+    (goal "TALK TO THE ELDER - PRESS E")
+    (objective (talk-to elder))
+    (on-complete
+      (complete-quest meet-elder))))

@@ -25,3 +25,6 @@ cabal.sandbox.config
 
 # Executables
 *.exe
+
+# Player data (see docs/SYSTEMS_DESIGN.md §4)
+saves/
