@@ -1,0 +1,16 @@
+;; Parallax decoration for level 02: a warmer, dustier shaft.
+
+(scene
+  (layer back-3 (parallax 0.2)
+    (prop silhouette-spire 200 100 100 560)
+    (prop silhouette-spire 800 40 120 620))
+  (layer back-2 (parallax 0.5)
+    (prop pillar 500 60 60 560)
+    (prop crystal 380 220 28 44)
+    (prop crystal 1000 150 20 32))
+  (layer back-1 (parallax 0.75)
+    (prop glow 700 200 200 120))
+  (layer front-2 (parallax 1.3) (alpha 190)
+    (prop hanging-vine 620 0 22 130))
+  (layer front-3 (parallax 1.55) (alpha 130)
+    (prop dust-band -400 300 3200 90)))

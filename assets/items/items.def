@@ -1,0 +1,31 @@
+;; pureHask item database.
+;; Adding an item = adding a form here. No recompilation.
+;; Names/descriptions use the built-in 3x5 font: A-Z, 0-9, space, colon, dash.
+
+(item gold-key
+  (name "GOLD KEY")
+  (category quest)
+  (color 255 220 0)
+  (desc "OPENS THE ABYSS GATE"))
+
+(item potion-hp-s
+  (name "SMALL POTION")
+  (category potion)
+  (stack 9)
+  (color 220 40 40)
+  (use (heal 30))
+  (desc "RESTORES 30 HP"))
+
+(item sword-rusty
+  (name "RUSTY SWORD")
+  (category equip weapon)
+  (color 180 190 200)
+  (stats (atk 5))
+  (desc "IT HAS SEEN BETTER DAYS"))
+
+(item boots-swift
+  (name "SWIFT BOOTS")
+  (category equip shoes)
+  (color 120 220 160)
+  (stats (spd 15) (def 1))
+  (desc "PLUS 15 PCT MOVE SPEED"))

@@ -1,0 +1,20 @@
+;; Parallax decoration for level 01. Adding art = adding props here.
+;; Prop colours are named in Render.Layers; swapping to textures later
+;; changes only that module.
+
+(scene
+  (layer back-3 (parallax 0.2)
+    (prop silhouette-hills -200 300 1200 320)
+    (prop silhouette-spire 500 180 80 440))
+  (layer back-2 (parallax 0.5)
+    (prop pillar 260 120 48 480)
+    (prop pillar 900 90 56 520)
+    (prop crystal 640 260 24 40))
+  (layer back-1 (parallax 0.75)
+    (prop pillar 120 200 36 420)
+    (prop glow 420 340 160 80))
+  (layer front-1 (parallax 1.15) (alpha 220)
+    (prop hanging-vine 300 0 20 110)
+    (prop hanging-vine 1150 0 24 150))
+  (layer front-3 (parallax 1.5) (alpha 150)
+    (prop fog-band -400 470 3000 70)))

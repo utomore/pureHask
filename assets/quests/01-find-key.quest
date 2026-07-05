@@ -1,0 +1,20 @@
+;; The first quest: auto-starts with a new game.
+;; Adding a quest = adding a file like this one. No recompilation.
+
+(quest find-key
+  (name "THE LOST KEY")
+  (auto-start)
+  (stage collect
+    (goal "FIND THE GOLD KEY")
+    (objective (collect gold-key 1))
+    (on-complete
+      (toast "THE KEY HUMS FAINTLY")
+      (advance-quest find-key)))
+  (stage escape
+    (goal "REACH THE EXIT GATE")
+    (objective (reach-goal))
+    (on-complete
+      (give-item potion-hp-s 1)
+      (toast "REWARD: SMALL POTION")
+      (set-flag first-key-found)
+      (complete-quest find-key))))

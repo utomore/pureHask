@@ -1,0 +1,21 @@
+;; The elder: first NPC. Personality = movement parameters + chatter lines.
+;; Dialogue rules are tried top to bottom; first matching condition wins.
+;; Adding an NPC = adding a file like this one. No recompilation.
+
+(npc elder
+  (name "ELDER")
+  (color 200 180 120)
+  (size 24 32)
+  (spawn-at 01-training 10 13)
+  (movement (patrol 8 14) (speed 35) (pause 1.5))
+  (chatter 9 "MY BACK ACHES" "THE ABYSS HUMS TONIGHT")
+  (dialogue
+    (rule (quest-state find-key done)
+      (say elder "THE GATE KNOWS YOUR NAME NOW."))
+    (rule (flag met-elder)
+      (say elder "THE KEY LIES ON THE HIGH LEDGE."
+                 "DOUBLE TAP TO DASH. PRESS A FOR THE HOOK."))
+    (default
+      (say elder "WELCOME TRAVELLER."
+                 "FIND THE GOLD KEY TO PASS THE GATE.")
+      (set-flag met-elder))))
