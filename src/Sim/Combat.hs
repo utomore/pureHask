@@ -10,6 +10,8 @@ import Apecs
 import Core.Components
 import Core.Types
 import Sim.CombatCore
+import Sim.ParticleCore (burstFor)
+import Sim.Particles (emitParticles)
 
 -- | Run one combat sub-step for the player.
 controlPlayer :: FrameInput -> Double -> Game ()
@@ -55,4 +57,4 @@ controlPlayer input dt =
   where
     spawnVfx (VfxRequest pos life ty mDir) = do
       _ <- newEntity (Position pos, VFX life ty mDir)
-      return ()
+      emitParticles (burstFor ty pos mDir)

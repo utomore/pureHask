@@ -40,6 +40,7 @@ spawnLevel lvl = do
   set ety ( DoubleJump False
           , PlayerHook HookRetracted
           , fullVitals playerMaxHp playerMaxMp playerMaxStamina
+          , Invuln 0.0
           )
   set ety ( Equipped M.empty
           , StatsCache baseStats
@@ -58,7 +59,8 @@ spawnLevel lvl = do
     return ()
 
 -- | Put the player back at the spawn point with a clean slate (items are kept;
---   dying does not reset collection progress).
+--   dying does not reset collection progress). Vitals refill — respawning
+--   with 0 hp would be an instant death loop.
 respawnPlayer :: V2 Double -> Game ()
 respawnPlayer spawnPos =
   cmapM_ $ \(Player, ety) -> do
@@ -67,7 +69,11 @@ respawnPlayer spawnPos =
             , IsGrounded False
             , StateIdle 0.0
             )
-    set ety (PlayerHook HookRetracted, DoubleJump False)
+    set ety ( PlayerHook HookRetracted
+            , DoubleJump False
+            , fullVitals playerMaxHp playerMaxMp playerMaxStamina
+            , Invuln 0.0
+            )
 
 --------------------------------------------------------------------------------
 -- Cross-level persistence

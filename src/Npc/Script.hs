@@ -22,6 +22,7 @@ module Npc.Script
   , NpcMovement(..)
   , DialogueRule(..)
   , compileNpc
+  , compileNpcs
   , loadNpcDir
   , npcItemRefs
   , npcQuestRefs
@@ -37,8 +38,10 @@ import System.Directory (listDirectory, doesDirectoryExist)
 import System.FilePath ((</>))
 
 import Core.Config (tileSize)
+import Core.Lang (LangTable, langText)
 import Core.Types (ItemId, QuestId, NpcId(..))
 import Script.Expr
+import Script.Inherit (resolveInherits)
 import Script.Sexp
 
 -- | How an NPC moves. Patrol coordinates are in pixels (converted from the
@@ -67,13 +70,16 @@ data NpcDef = NpcDef
   , ndDialogue :: ![DialogueRule]
   } deriving (Eq, Show)
 
-compileNpc :: [Sexp] -> Either String NpcDef
-compileNpc [] = Left "npc: (npc …) without an id"
-compileNpc (idForm : body) = do
+compileNpc :: LangTable -> [Sexp] -> Either String NpcDef
+compileNpc _ [] = Left "npc: (npc …) without an id"
+compileNpc table (idForm : body) = do
   rawId <- maybe (Left "npc: id must be a symbol") Right (sexpSymbol idForm)
   let ctx = "npc '" <> T.unpack rawId <> "'"
+      textOf form = either (Left . ((ctx <> ": ") <>)) Right (langText table form)
 
-  name <- require ctx "name" $ fieldOf "name" body >>= safeHead >>= sexpString
+  name <- case fieldOf "name" body >>= safeHead of
+    Just form -> textOf form
+    Nothing   -> Left (ctx <> ": missing (name …)")
 
   color <- case fieldOf "color" body of
     Just [SNum r, SNum g, SNum b] -> Right (round r, round g, round b)
@@ -96,13 +102,14 @@ compileNpc (idForm : body) = do
   chatter <- case fieldOf "chatter" body of
     Nothing -> Right Nothing
     Just (SNum interval : rest)
-      | Just lns <- mapM sexpString rest, not (null lns) ->
+      | not (null rest) -> do
+          lns <- mapM textOf rest
           Right (Just (interval, lns))
     Just other -> Left (ctx <> ": bad chatter " <> show other)
 
   dialogue <- case fieldOf "dialogue" body of
     Nothing    -> Right []
-    Just forms -> mapM (compileRule ctx) forms
+    Just forms -> mapM (compileRule table ctx) forms
 
   Right NpcDef
     { ndId = NpcId rawId, ndName = name, ndColor = color, ndSize = size
@@ -112,7 +119,6 @@ compileNpc (idForm : body) = do
   where
     safeHead (x : _) = Just x
     safeHead []      = Nothing
-    require ctx' what = maybe (Left (ctx' <> ": missing (" <> what <> " …)")) Right
 
 compileMovement :: String -> Maybe [Sexp] -> V2 Double -> Either String NpcMovement
 compileMovement _ Nothing _ = Right MoveIdle
@@ -134,17 +140,19 @@ compileMovement ctx (Just parts) _spawn = do
       Just other -> Left (ctx <> ": bad patrol " <> show other)
       Nothing    -> Left (ctx <> ": movement needs (idle) or (patrol X1 X2)")
 
-compileRule :: String -> Sexp -> Either String DialogueRule
-compileRule ctx form = case form of
+compileRule :: LangTable -> String -> Sexp -> Either String DialogueRule
+compileRule table ctx form = case form of
   SList (SSym "rule" : condForm : actionForms)
     | not (null actionForms) -> do
         c <- either (Left . ((ctx <> ": ") <>)) Right (compileCond condForm)
-        acts <- mapM (either (Left . ((ctx <> ": ") <>)) Right . compileAction)
+        acts <- mapM (either (Left . ((ctx <> ": ") <>)) Right
+                        . compileAction table)
                   actionForms
         Right (DialogueRule (Just c) acts)
   SList (SSym "default" : actionForms)
     | not (null actionForms) -> do
-        acts <- mapM (either (Left . ((ctx <> ": ") <>)) Right . compileAction)
+        acts <- mapM (either (Left . ((ctx <> ": ") <>)) Right
+                        . compileAction table)
                   actionForms
         Right (DialogueRule Nothing acts)
   _ -> Left (ctx <> ": bad dialogue rule " <> show form)
@@ -163,9 +171,21 @@ npcQuestRefs nd = concat
   | r <- ndDialogue nd
   ]
 
+-- | Compile every @(npc …)@ form in a set of top-level forms, with
+--   @(inherit BASE)@ expanded first. Dialogue RULES concatenate child-first
+--   (the child's take priority, and its @(default …)@ replaces the base's);
+--   @movement@ merges per-parameter; @spawn-at@ is never inherited.
+compileNpcs :: LangTable -> [Sexp] -> Either String [NpcDef]
+compileNpcs table forms = do
+  bodies <- resolveInherits "npc" ["movement"] ["dialogue"] ["spawn-at"]
+              (formsNamed "npc" forms)
+  mapM (compileNpc table) bodies
+
 -- | Load and compile every @*.npc@ file in a directory (sorted by name).
-loadNpcDir :: FilePath -> IO (Either String [NpcDef])
-loadNpcDir dir = do
+--   Files are parsed together so @(inherit …)@ works across files (bases
+--   must sort earlier).
+loadNpcDir :: LangTable -> FilePath -> IO (Either String [NpcDef])
+loadNpcDir table dir = do
   exists <- doesDirectoryExist dir
   if not exists
     then pure (Right [])
@@ -173,13 +193,11 @@ loadNpcDir dir = do
       entries <- listDirectory dir
       let files = [ dir </> e | e <- sort entries, ".npc" `isSuffixOf` e ]
       results <- mapM loadOne files
-      pure (concat <$> sequence results)
+      pure (sequence results >>= compileNpcs table . concat)
   where
     loadOne path = do
       bytes <- BS.readFile path
       pure $ case decodeUtf8' bytes of
         Left err -> Left (path <> ": not valid UTF-8 (" <> show err <> ")")
-        Right txt -> do
-          forms <- either (Left . ((path <> ": ") <>)) Right (parseSexps txt)
-          mapM (either (Left . ((path <> ": ") <>)) Right . compileNpc)
-               (formsNamed "npc" forms)
+        Right txt ->
+          either (Left . ((path <> ": ") <>)) Right (parseSexps txt)

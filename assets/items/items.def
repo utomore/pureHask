@@ -1,31 +1,33 @@
-;; pureHask item database.
-;; Adding an item = adding a form here. No recompilation.
-;; Names/descriptions use the built-in 3x5 font: A-Z, 0-9, space, colon, dash.
+;; pureHask 道具資料庫。
+;; 新增道具 = 在這裡加一個表單。不需重新編譯,存檔即熱重載。
+;; 顯示文字用「裸符號」引用 assets/lang/*.lang 的 key(多語言);
+;; 也可以直接寫 "字串" 字面值(打原型用)。
+;; (inherit BASE) 可繼承較早定義的道具,只寫差異(stats 逐項合併)。
 
 (item gold-key
-  (name "GOLD KEY")
+  (name item.gold-key.name)
   (category quest)
   (color 255 220 0)
-  (desc "OPENS THE ABYSS GATE"))
+  (desc item.gold-key.desc))
 
 (item potion-hp-s
-  (name "SMALL POTION")
+  (name item.potion-hp-s.name)
   (category potion)
   (stack 9)
   (color 220 40 40)
   (use (heal 30))
-  (desc "RESTORES 30 HP"))
+  (desc item.potion-hp-s.desc))
 
 (item sword-rusty
-  (name "RUSTY SWORD")
+  (name item.sword-rusty.name)
   (category equip weapon)
   (color 180 190 200)
   (stats (atk 5))
-  (desc "IT HAS SEEN BETTER DAYS"))
+  (desc item.sword-rusty.desc))
 
 (item boots-swift
-  (name "SWIFT BOOTS")
+  (name item.boots-swift.name)
   (category equip shoes)
   (color 120 220 160)
   (stats (spd 15) (def 1))
-  (desc "PLUS 15 PCT MOVE SPEED"))
+  (desc item.boots-swift.desc))

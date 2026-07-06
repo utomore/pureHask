@@ -1,0 +1,19 @@
+;; 關卡 05「深淵之門」的視差佈景:最深處,晶簇與濃霧。
+
+(scene
+  (layer back-3 (parallax 0.2)
+    (prop silhouette-spire 300 40 140 640)
+    (prop silhouette-spire 950 100 100 560))
+  (layer back-2 (parallax 0.5)
+    (prop pillar 200 60 60 560)
+    (prop pillar 820 100 48 520)
+    (prop crystal 560 180 30 48)
+    (prop crystal 1180 260 22 36))
+  (layer back-1 (parallax 0.75)
+    (prop glow 480 260 240 140)
+    (prop crystal 720 340 26 40))
+  (layer front-1 (parallax 1.15) (alpha 220)
+    (prop hanging-vine 350 0 24 170)
+    (prop hanging-vine 1050 0 20 130))
+  (layer front-3 (parallax 1.5) (alpha 160)
+    (prop fog-band -400 400 3400 110)))

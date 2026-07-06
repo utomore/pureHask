@@ -1,0 +1,23 @@
+;; 史萊姆:第一種敵人。接觸傷害,短距巡邏,近距離才追擊。
+;; 新增敵人 = 新增一個這樣的檔案;新增一隻 = 加一行 (spawn-at …)。
+;; 格式教學見 docs/DSL_GUIDE.md。
+
+(enemy slime
+  (name enemy.slime.name)
+  (color 90 200 90)
+  (size 24 18)
+  (stats (hp 30) (damage 10) (speed 60))
+  (behavior (patrol 3) (aggro 150) (attack contact))
+  (spawn-at 03-hollow 20 13)
+  (spawn-at 03-hollow 34 13)
+  (spawn-at 05-abyssgate 22 13))
+
+;; 赤紅史萊姆:用 (inherit slime) 只寫差異——顏色、血量與傷害。
+;; stats 逐項合併(speed 沿用 60);spawn-at 永不繼承,自己放。
+
+(enemy slime-red
+  (inherit slime)
+  (name enemy.slime-red.name)
+  (color 220 80 80)
+  (stats (hp 50) (damage 14))
+  (spawn-at 05-abyssgate 30 13))

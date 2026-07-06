@@ -3,6 +3,8 @@
 --   folded by "FRP.Network" (via "Game.Logic"), unit-tested directly.
 module Quest.Runtime
   ( QuestOut(..)
+  , QuestText(..)
+  , defaultQuestText
   , initialQuestLog
   , stepQuests
   , applyQuestAction
@@ -24,6 +26,18 @@ data QuestOut = QuestOut
   , qoToasts   :: ![Text]
   } deriving (Eq, Show)
 
+-- | The engine-generated toast prefixes, resolved from the language table
+--   at startup (keys @ui.quest.started@ / @ui.quest.completed@). The quest
+--   machine stays pure — text is data fed in, never looked up here.
+data QuestText = QuestText
+  { qtStarted   :: !Text
+  , qtCompleted :: !Text
+  } deriving (Eq, Show)
+
+-- | Fallback wording, also what the unit tests run against.
+defaultQuestText :: QuestText
+defaultQuestText = QuestText "任務開始:" "任務完成:"
+
 -- | Fresh log: auto-start quests begin active.
 initialQuestLog :: [QuestDef] -> QuestLog
 initialQuestLog defs = QuestLog
@@ -37,8 +51,8 @@ progressOf qlog qid =
   M.findWithDefault (QuestProgress QAvailable 0 0) qid (qlQuests qlog)
 
 -- | Feed one frame's simulation events through every quest.
-stepQuests :: [QuestDef] -> [GameEvent] -> QuestLog -> QuestOut
-stepQuests defs evs qlog0 = foldl handleEvent (QuestOut qlog0 [] []) evs
+stepQuests :: QuestText -> [QuestDef] -> [GameEvent] -> QuestLog -> QuestOut
+stepQuests qtext defs evs qlog0 = foldl handleEvent (QuestOut qlog0 [] []) evs
   where
     handleEvent out ev = case ev of
       -- A loaded save replaces the whole log.
@@ -60,7 +74,7 @@ stepQuests defs evs qlog0 = foldl handleEvent (QuestOut qlog0 [] []) evs
                  in foldl (runAction qd) out' (qsOnComplete stage)
            _ -> out
 
-    runAction _qd out act = applyQuestAction defs act out
+    runAction _qd out act = applyQuestAction qtext defs act out
 
 data ObjectiveTick = NoProgress | Counted !Int | Fulfilled
 
@@ -73,13 +87,16 @@ objectiveTick ev obj count = case (ev, obj) of
   (EvGoalReached, ObjReachGoal) -> Fulfilled
   (EvTalkedTo npc, ObjTalkTo want)
     | npc == want -> Fulfilled
+  (EvEnemyKilled eid, ObjKill want n)
+    | eid == want ->
+        if count + 1 >= n then Fulfilled else Counted (count + 1)
   _ -> NoProgress
 
 -- | Interpret one script action in the quest layer. Quest/flag actions edit
 --   the log; world actions become commands; dialogue and toasts surface to
 --   the HUD.
-applyQuestAction :: [QuestDef] -> Action -> QuestOut -> QuestOut
-applyQuestAction defs act out = case act of
+applyQuestAction :: QuestText -> [QuestDef] -> Action -> QuestOut -> QuestOut
+applyQuestAction qtext defs act out = case act of
   ASetFlag name   -> mapLog (\l -> l { qlFlags = S.insert name (qlFlags l) }) out
   AClearFlag name -> mapLog (\l -> l { qlFlags = S.delete name (qlFlags l) }) out
   AGiveItem iid n -> out { qoCommands = qoCommands out <> [WcGiveItem iid n] }
@@ -95,7 +112,7 @@ applyQuestAction defs act out = case act of
     let prog = progressOf (qoLog out) q
     in case qpPhase prog of
          QAvailable ->
-           withToast ("QUEST STARTED: " <> nameOf q)
+           withToast (qtStarted qtext <> nameOf q)
              (mapLog (\l -> putProgress l q (QuestProgress QActive 0 0)) out)
          _ -> out
   AAdvanceQuest q ->
@@ -115,7 +132,7 @@ applyQuestAction defs act out = case act of
       []      -> Nothing
     nameOf q = maybe (let QuestId raw = q in raw) qdName (defOf q)
     complete q o =
-      withToast ("QUEST COMPLETE: " <> nameOf q)
+      withToast (qtCompleted qtext <> nameOf q)
         (mapLog (\l -> putProgress l q
                   (progressOf (qoLog o) q) { qpPhase = QDone }) o)
 

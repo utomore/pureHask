@@ -1,12 +1,23 @@
 -- | Save-game serialization: a single 'SaveGame' record to/from JSON.
 --   'decodeSave . encodeSave ≡ Right' is the core roundtrip invariant
---   (tested). A version mismatch or corrupt file is rejected whole — the
---   game never half-loads a save.
+--   (tested). Corrupt files are rejected whole — the game never half-loads
+--   a save.
+--
+--   Versioning: 'currentSaveVersion' is bumped on every schema change and a
+--   step is appended to 'migrations'; old saves are then upgraded value-by-
+--   value on load instead of rejected. Only FUTURE versions are refused.
+--
+--   Content references (quest ids, item ids) can still go stale when assets
+--   change between sessions — 'sanitizeSave' drops or clamps them explicitly
+--   with human-readable warnings, never silently pointing at the wrong
+--   thing.
 module Save.Codec
   ( SaveGame(..)
+  , SaveEnv(..)
   , currentSaveVersion
   , encodeSave
   , decodeSave
+  , sanitizeSave
   , slotSummary
   , slotPath
   , writeSlot
@@ -15,9 +26,12 @@ module Save.Codec
 
 import qualified Data.Aeson as A
 import Data.Aeson ((.=), (.:))
+import qualified Data.Aeson.KeyMap as KM
 import qualified Data.Aeson.Types as A
 import qualified Data.ByteString.Lazy as BL
 import Control.Exception (try, IOException)
+import Control.Monad (foldM)
+import Data.List (elemIndex)
 import qualified Data.Map.Strict as M
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -28,9 +42,18 @@ import Text.Printf (printf)
 import Core.Types
 import Sim.Spawn (PlayerPersist(..))
 
--- | Bump when the schema changes; old saves are then rejected loudly.
+-- | Bump when the schema changes AND append a step to 'migrations'.
+--
+--   History: v1 stored the level as a sort-order INDEX (inserting a level
+--   file silently retargeted every old save); v2 stores the level file's
+--   base name.
 currentSaveVersion :: Int
-currentSaveVersion = 1
+currentSaveVersion = 2
+
+-- | What the codec needs from the running game: the discovered level base
+--   names, in play order.
+newtype SaveEnv = SaveEnv { seLevelNames :: [String] }
+  deriving (Eq, Show)
 
 -- | Everything a save file holds.
 data SaveGame = SaveGame
@@ -45,13 +68,13 @@ data SaveGame = SaveGame
 -- Encoding (hand-written; no orphan instances on Core.Types)
 --------------------------------------------------------------------------------
 
-encodeSave :: SaveGame -> BL.ByteString
-encodeSave sv = A.encode $ A.object
-  [ "version"  .= svVersion sv
-  , "level"    .= svLevel sv
-  , "stats"    .= statsV (svStats sv)
-  , "player"   .= playerV (svPlayer sv)
-  , "quests"   .= questsV (svQuests sv)
+encodeSave :: SaveEnv -> SaveGame -> BL.ByteString
+encodeSave env sv = A.encode $ A.object
+  [ "version"   .= svVersion sv
+  , "levelName" .= levelNameOf env (svLevel sv)
+  , "stats"     .= statsV (svStats sv)
+  , "player"    .= playerV (svPlayer sv)
+  , "quests"    .= questsV (svQuests sv)
   ]
   where
     questsV qlog = A.object
@@ -85,22 +108,67 @@ encodeSave sv = A.encode $ A.object
     derivedV d = A.object
       [ "atk" .= dsAtk d, "def" .= dsDef d, "speedMult" .= dsSpeedMult d ]
 
-decodeSave :: BL.ByteString -> Either String SaveGame
-decodeSave bytes = do
+-- | The clamped level base name for an index (encode side).
+levelNameOf :: SaveEnv -> Int -> String
+levelNameOf (SaveEnv names) ix = case drop ix names of
+  (n : _) -> n
+  []      -> case reverse names of { (n : _) -> n; [] -> "" }
+
+--------------------------------------------------------------------------------
+-- Migrations
+--------------------------------------------------------------------------------
+
+-- | One entry per historical version: upgrade a version-N object to N+1.
+--   Loading folds the chain from the file's version up to
+--   'currentSaveVersion', so any past save keeps working.
+migrations :: SaveEnv -> [(Int, A.Object -> A.Parser A.Object)]
+migrations env =
+  [ (1, migrate1to2 env)
+  ]
+
+-- | v1 -> v2: the level was stored as a sort-order index; replace it with
+--   the level's base name (out-of-range indices are a hard error — better a
+--   loud CORRUPT slot than loading the wrong level).
+migrate1to2 :: SaveEnv -> A.Object -> A.Parser A.Object
+migrate1to2 (SaveEnv names) o = do
+  ix <- o .: "level"
+  case drop ix names of
+    (name : _) | ix >= 0 ->
+      pure . KM.insert "levelName" (A.toJSON name) . KM.delete "level" $ o
+    _ -> fail ("migration v1->v2: level index " <> show (ix :: Int)
+               <> " is out of range (have " <> show (length names) <> " levels)")
+
+-- | Run every applicable migration step, then bump the version field.
+migrate :: SaveEnv -> Int -> A.Object -> A.Parser A.Object
+migrate env from o = do
+  o' <- foldM step o [from .. currentSaveVersion - 1]
+  pure (KM.insert "version" (A.toJSON currentSaveVersion) o')
+  where
+    step obj v = case lookup v (migrations env) of
+      Just f  -> f obj
+      Nothing -> fail ("no migration from save version " <> show v)
+
+decodeSave :: SaveEnv -> BL.ByteString -> Either String SaveGame
+decodeSave env bytes = do
   value <- A.eitherDecode bytes
   A.parseEither parseSave value
   where
-    parseSave = A.withObject "SaveGame" $ \o -> do
-      version <- o .: "version"
-      if version /= currentSaveVersion
-        then fail ("unsupported save version " <> show (version :: Int)
-                   <> " (expected " <> show currentSaveVersion <> ")")
+    parseSave = A.withObject "SaveGame" $ \o0 -> do
+      version <- o0 .: "version"
+      if version > currentSaveVersion
+        then fail ("save version " <> show (version :: Int)
+                   <> " is newer than this game (expected <= "
+                   <> show currentSaveVersion <> ")")
         else do
-          level <- o .: "level"
+          o <- migrate env version o0
+          levelName <- o .: "levelName"
+          level <- case elemIndex (levelName :: String) (seLevelNames env) of
+            Just ix -> pure ix
+            Nothing -> fail ("save references unknown level '" <> levelName <> "'")
           stats <- o .: "stats" >>= parseStats
           player <- o .: "player" >>= parsePlayer
           quests <- o .: "quests" >>= parseQuests
-          pure (SaveGame version level stats player quests)
+          pure (SaveGame currentSaveVersion level stats player quests)
 
     parseStats = A.withObject "stats" $ \o ->
       RunStats <$> o .: "deaths" <*> o .: "items" <*> o .: "time"
@@ -163,6 +231,50 @@ parseSlotKey t = case t of
   other    -> fail ("unknown equip slot key " <> T.unpack other)
 
 --------------------------------------------------------------------------------
+-- Sanitization (stale content references)
+--------------------------------------------------------------------------------
+
+-- | Drop references to content that no longer exists and clamp what can be
+--   clamped, returning warnings for everything touched. Content ids can go
+--   stale between sessions (a quest renamed, an item removed); loading must
+--   handle that EXPLICITLY instead of silently tracking the wrong thing.
+sanitizeSave
+  :: [(QuestId, Int)]  -- ^ known quests with their stage counts
+  -> [ItemId]          -- ^ known item ids
+  -> SaveGame
+  -> (SaveGame, [String])
+sanitizeSave knownQuests knownItems sv =
+  ( sv { svQuests = QuestLog (M.fromList keptQuests) (qlFlags qlog)
+       , svPlayer = player { ppBackpack = keptBackpack, ppEquipped = keptEquipped }
+       }
+  , questWarns <> bagWarns <> eqWarns
+  )
+  where
+    qlog = svQuests sv
+    player = svPlayer sv
+
+    (keptQuests, questWarns) = foldr checkQuest ([], []) (M.toList (qlQuests qlog))
+    checkQuest (qid@(QuestId raw), prog) (keep, warns) =
+      case lookup qid knownQuests of
+        Nothing -> (keep, ("save: dropped unknown quest '" <> T.unpack raw <> "'") : warns)
+        Just stageCount
+          | qpStage prog >= stageCount ->
+              ( (qid, prog { qpStage = max 0 (stageCount - 1) }) : keep
+              , ("save: clamped stage of quest '" <> T.unpack raw <> "'") : warns )
+          | otherwise -> ((qid, prog) : keep, warns)
+
+    (keptBackpack, bagWarns) =
+      let (bad, good) = M.partitionWithKey (\iid _ -> iid `notElem` knownItems)
+                          (ppBackpack player)
+      in (good, [ "save: dropped unknown item '" <> T.unpack raw <> "'"
+                | ItemId raw <- M.keys bad ])
+
+    (keptEquipped, eqWarns) =
+      let (bad, good) = M.partition (`notElem` knownItems) (ppEquipped player)
+      in (good, [ "save: unequipped unknown item '" <> T.unpack raw <> "'"
+                | ItemId raw <- M.elems bad ])
+
+--------------------------------------------------------------------------------
 -- Files
 --------------------------------------------------------------------------------
 
@@ -178,14 +290,15 @@ slotSummary sv =
       (m, s) = total `divMod` 60
   in printf "LV %d  %02d:%02d" (svLevel sv + 1) m s
 
-writeSlot :: Int -> SaveGame -> IO ()
-writeSlot n sv = do
+writeSlot :: SaveEnv -> Int -> SaveGame -> IO ()
+writeSlot env n sv = do
   createDirectoryIfMissing True "saves"
-  BL.writeFile (slotPath n) (encodeSave sv)
+  BL.writeFile (slotPath n) (encodeSave env sv)
 
--- | Nothing = slot empty; Left = present but unreadable (corrupt/old).
-readSlot :: Int -> IO (Maybe (Either String SaveGame))
-readSlot n = do
+-- | Nothing = slot empty; Left = present but unreadable (corrupt). Old
+--   versions are migrated transparently.
+readSlot :: SaveEnv -> Int -> IO (Maybe (Either String SaveGame))
+readSlot env n = do
   let path = slotPath n
   exists <- doesFileExist path
   if not exists
@@ -194,4 +307,4 @@ readSlot n = do
       result <- try (BL.readFile path) :: IO (Either IOException BL.ByteString)
       pure . Just $ case result of
         Left err    -> Left (show err)
-        Right bytes -> decodeSave bytes
+        Right bytes -> decodeSave env bytes

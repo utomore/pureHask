@@ -27,6 +27,8 @@ import Core.Types
 import Items.Registry (ItemRegistry, defId, defUse, defCategory, lookupItem)
 import Sim.EquipCore (equipItem, unequipSlot, computeStats)
 import Sim.Items (applyEffects, firstPotion, consumeOne)
+import Sim.ParticleCore (pickupBurst)
+import Sim.Particles (emitParticles)
 
 -- | Append a simulation fact to the global outbox.
 emitEvent :: GameEvent -> Game ()
@@ -74,6 +76,7 @@ applyIntents registry input = do
             then do
               destroy itemEty (Proxy @(Position, Collider, Item))
               emitEvent (EvItemPicked item)
+              emitParticles (pickupBurst (itemPos + itemSize / 2.0))
               return (item : acc)
             else return acc)
         []

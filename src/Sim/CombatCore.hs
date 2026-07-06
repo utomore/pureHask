@@ -149,14 +149,44 @@ combatStep ci = CombatOut
                       | otherwise = (vy, ciDoubleJumped ci, [], 0.0)
                 in (StateIdle cd', runSpeed, jumpVel, djNew, hookAfterPress, jumpVfx, jumpCost)
 
+      -- Dash jump: jump pressed mid-dash launches the player with most of
+      -- the dash's horizontal momentum (see 'dashJumpCarryFactor'). Grounded
+      -- dash jumps are free; airborne ones spend the double jump.
       StateDashing t ->
         let t' = t - dt
-        in if t' <= 0.0
-             then (StateIdle dashCooldownDuration, 0.0, vy, ciDoubleJumped ci, hookAfterPress, [], 0.0)
-             else ( StateDashing t'
-                  , signed facing' dashSpeed, 0.0
-                  , ciDoubleJumped ci, hookAfterPress
-                  , [VfxRequest pos 0.12 VFXDashGhost (Just facing')], 0.0 )
+            canAirLaunch = not (ciDoubleJumped ci)
+                             && ciStamina ci >= doubleJumpStaminaCost
+            launch dj cost =
+              ( StateDashJump
+              , signed facing' (dashSpeed * dashJumpCarryFactor), jumpSpeed
+              , dj, hookAfterPress
+              , [VfxRequest pos 0.15 VFXDashGhost (Just facing')], cost )
+        in if has IntentJump input && (grounded || canAirLaunch)
+             then if grounded
+                    then launch (ciDoubleJumped ci) 0.0
+                    else launch True doubleJumpStaminaCost
+             else if t' <= 0.0
+               then (StateIdle dashCooldownDuration, 0.0, vy, ciDoubleJumped ci, hookAfterPress, [], 0.0)
+               else ( StateDashing t'
+                    , signed facing' dashSpeed, 0.0
+                    , ciDoubleJumped ci, hookAfterPress
+                    , [VfxRequest pos 0.12 VFXDashGhost (Just facing')], 0.0 )
+
+      -- Airborne with carried momentum: horizontal velocity is preserved
+      -- (never overwritten by run speed) until landing, which re-enters
+      -- 'StateIdle' with the dash cooldown running. A double jump keeps the
+      -- momentum; attack turns into the usual plunge.
+      StateDashJump
+        | grounded ->
+            (StateIdle dashCooldownDuration, vx, vy, ciDoubleJumped ci, hookAfterPress, [], 0.0)
+        | has IntentAttackPress input ->
+            (StatePlunge, 0.0, plungeSpeed, ciDoubleJumped ci, hookAfterPress, [], 0.0)
+        | has IntentJump input && not (ciDoubleJumped ci)
+            && ciStamina ci >= doubleJumpStaminaCost ->
+            ( StateDashJump, vx, jumpSpeed, True, hookAfterPress
+            , [VfxRequest pos 0.15 VFXDashGhost Nothing], doubleJumpStaminaCost )
+        | otherwise ->
+            (StateDashJump, vx, vy, ciDoubleJumped ci, hookAfterPress, [], 0.0)
 
       StateMelee t ->
         let t' = t - dt
@@ -214,6 +244,7 @@ combatStep ci = CombatOut
     -- 4. Jumping off the ground clears grounded immediately so the next
     --    sub-step cannot treat the lift-off frame as still grounded.
     grounded' =
-      if has IntentJump input && grounded && state' == StateIdle 0.0
+      if has IntentJump input && grounded
+           && (state' == StateIdle 0.0 || state' == StateDashJump)
         then False
         else grounded

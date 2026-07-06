@@ -10,6 +10,7 @@ module Core.Types
   , ItemId(..)
   , QuestId(..)
   , NpcId(..)
+  , EnemyId(..)
   , EquipSlot(..)
   , ItemCategory(..)
     -- * Raw input (SDL-agnostic key snapshot)
@@ -79,6 +80,9 @@ newtype QuestId = QuestId Text deriving (Eq, Ord, Show)
 
 -- | Identifier of an NPC defined in @assets/npcs/*.npc@.
 newtype NpcId = NpcId Text deriving (Eq, Ord, Show)
+
+-- | Identifier of an enemy kind defined in @assets/enemies/*.enemy@.
+newtype EnemyId = EnemyId Text deriving (Eq, Ord, Show)
 
 -- | The five equipment slots. Fixed at the code level: equipment BEHAVIOUR
 --   is logic, so the compiler owns it.
@@ -176,6 +180,7 @@ emptyFrameInput = FrameInput [] noKeysHeld
 data CombatState
   = StateIdle        { dashCooldown   :: !Double }
   | StateDashing     { dashTimeLeft   :: !Double }
+  | StateDashJump    -- ^ airborne with carried dash momentum; ends on landing
   | StateMelee       { attackTimeLeft :: !Double }
   | StateCharging    { chargeTime     :: !Double }
   | StateThrust      { thrustTimeLeft :: !Double }
@@ -262,6 +267,7 @@ data GameEvent
   | EvItemUsed !ItemId
   | EvEquipChanged
   | EvTalkedTo !NpcId                        -- ^ player interacted with an NPC
+  | EvEnemyKilled !EnemyId                   -- ^ an enemy dropped to 0 hp
   | EvRunRestored !Int !RunStats !QuestLog   -- ^ a save was loaded
   deriving (Eq, Show)
 
@@ -360,7 +366,7 @@ data MenuEnv = MenuEnv
   , meEquipped  :: ![(EquipSlot, Maybe ItemId)]   -- ^ the five slots
   , meSaveSlots :: ![Maybe String]                -- ^ manual slot summaries
   , meAutoSave  :: !(Maybe String)                -- ^ autosave summary
-  , meSettings  :: ![(String, Bool)]              -- ^ settings rows
+  , meSettings  :: ![(String, String)]            -- ^ settings rows (label, value)
   } deriving (Eq, Show)
 
 emptyMenuEnv :: MenuEnv

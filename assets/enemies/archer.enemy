@@ -1,0 +1,11 @@
+;; 深淵射手:遠程敵人。與玩家保持距離,每 2 秒射出一箭。
+
+(enemy archer
+  (name enemy.archer.name)
+  (color 170 90 220)
+  (size 22 30)
+  (stats (hp 20) (damage 8) (speed 45))
+  (behavior (patrol 2) (aggro 280) (attack ranged 2.0 320))
+  (spawn-at 04-echoes 30 13)
+  (spawn-at 04-echoes 45 7)
+  (spawn-at 05-abyssgate 36 13))

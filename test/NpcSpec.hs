@@ -1,6 +1,7 @@
 module NpcSpec (spec) where
 
 import qualified Data.Set as S
+import qualified Data.Map.Strict as M
 import qualified Data.Text as T
 import Linear (V2(..))
 import Test.Hspec
@@ -23,7 +24,7 @@ elderDef =
             \    (rule (flag met-elder) (say elder \"AGAIN\"))\
             \    (default (say elder \"HELLO\" \"FIND THE KEY\") (set-flag met-elder))))"
       Right forms = parseSexps (T.pack src)
-      Right [def] = mapM compileNpc (formsNamed "npc" forms)
+      Right [def] = mapM (compileNpc M.empty) (formsNamed "npc" forms)
   in def
 
 spec :: Spec
@@ -41,7 +42,7 @@ spec = do
     it "rejects an npc without spawn-at" $ do
       let Right forms = parseSexps "(npc x (name \"X\"))"
           [body] = formsNamed "npc" forms
-      compileNpc body `shouldSatisfy` \r -> case r of
+      compileNpc M.empty body `shouldSatisfy` \r -> case r of
         Left err -> "spawn-at" `elem` words err || not (null err)
         Right _  -> False
 

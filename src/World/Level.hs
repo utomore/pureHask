@@ -23,6 +23,9 @@ module World.Level
   , levelDirectory
   ) where
 
+import qualified Data.ByteString as BS
+import qualified Data.Text as T
+import Data.Text.Encoding (decodeUtf8')
 import qualified Data.Vector as V
 import Data.Char (isSpace)
 import Data.List (sort, isSuffixOf)
@@ -109,11 +112,17 @@ parseLevel name raw
       , mapTiles  = V.fromList [ toTile ch | (_, _, ch) <- coords ]
       }
 
--- | Load and parse one level file.
+-- | Load and parse one level file. Read as UTF-8 bytes (never the system
+--   locale) and BOM-agnostic — editors love sneaking a BOM in, which would
+--   otherwise shift row 0 by one tile.
 loadLevelFile :: FilePath -> IO (Either String LevelData)
 loadLevelFile path = do
-  raw <- readFile path
-  pure (parseLevel (takeBaseName path) raw)
+  bytes <- BS.readFile path
+  pure $ case decodeUtf8' bytes of
+    Left err  -> Left (path <> ": not valid UTF-8 (" <> show err <> ")")
+    Right txt -> parseLevel (takeBaseName path) (T.unpack (stripBom txt))
+  where
+    stripBom t = maybe t id (T.stripPrefix "\65279" t)
 
 -- | Find all level files, sorted by name. The sort order IS the level order,
 --   which is why files are conventionally named @01-…txt@, @02-…txt@.

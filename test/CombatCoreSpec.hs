@@ -85,6 +85,70 @@ spec = do
           out = combatStep dashing
       coState out `shouldBe` StateIdle dashCooldownDuration
 
+  describe "dash jump" $ do
+    it "jump mid-dash launches with carried dash momentum" $ do
+      let dashing = baseIn { ciState = StateDashing 0.1
+                           , ciVel = V2 dashSpeed 0.0 }
+          out = combatStep (withIntents [IntentJump] dashing)
+      coState out `shouldBe` StateDashJump
+      vx out `shouldBe` dashSpeed * dashJumpCarryFactor
+      vy out `shouldBe` jumpSpeed
+      coGrounded out `shouldBe` False
+
+    it "a grounded dash jump does not spend the double jump" $ do
+      let dashing = baseIn { ciState = StateDashing 0.1 }
+          out = combatStep (withIntents [IntentJump] dashing)
+      coDoubleJumped out `shouldBe` False
+
+    it "momentum is preserved in the air, not overwritten by run speed" $ do
+      let flying = baseIn { ciState = StateDashJump, ciGrounded = False
+                          , ciVel = V2 680.0 (-200.0) }
+          out = combatStep (withHeld (\h -> h { heldLeft = True }) flying)
+      coState out `shouldBe` StateDashJump
+      vx out `shouldBe` 680.0
+
+    it "carries momentum leftward too" $ do
+      let dashing = baseIn { ciState = StateDashing 0.1, ciFacing = DirLeft
+                           , ciVel = V2 (-dashSpeed) 0.0 }
+          out = combatStep (withIntents [IntentJump] dashing)
+      vx out `shouldBe` negate (dashSpeed * dashJumpCarryFactor)
+
+    it "landing re-enters idle with the dash cooldown running" $ do
+      let landed = baseIn { ciState = StateDashJump, ciGrounded = True
+                          , ciVel = V2 680.0 0.0 }
+          out = combatStep landed
+      coState out `shouldBe` StateIdle dashCooldownDuration
+
+    it "an airborne dash jump spends the double jump and stamina" $ do
+      let airDash = baseIn { ciState = StateDashing 0.1, ciGrounded = False }
+          out = combatStep (withIntents [IntentJump] airDash)
+      coState out `shouldBe` StateDashJump
+      coDoubleJumped out `shouldBe` True
+      coStamina out `shouldBe` playerMaxStamina - doubleJumpStaminaCost
+
+    it "an airborne dash jump is blocked once the double jump is spent" $ do
+      let airDash = baseIn { ciState = StateDashing 0.1, ciGrounded = False
+                           , ciDoubleJumped = True }
+          out = combatStep (withIntents [IntentJump] airDash)
+      coState out `shouldSatisfy` \s -> case s of
+        StateDashing _ -> True
+        _              -> False
+
+    it "a double jump from a dash jump keeps the horizontal momentum" $ do
+      let flying = baseIn { ciState = StateDashJump, ciGrounded = False
+                          , ciVel = V2 680.0 300.0 }
+          out = combatStep (withIntents [IntentJump] flying)
+      coState out `shouldBe` StateDashJump
+      vx out `shouldBe` 680.0
+      vy out `shouldBe` jumpSpeed
+      coDoubleJumped out `shouldBe` True
+
+    it "attack from a dash jump plunges as usual" $ do
+      let flying = baseIn { ciState = StateDashJump, ciGrounded = False
+                          , ciVel = V2 680.0 0.0 }
+          out = combatStep (withIntents [IntentAttackPress] flying)
+      coState out `shouldBe` StatePlunge
+
   describe "attack" $ do
     it "grounded attack starts charging" $ do
       let out = combatStep (withIntents [IntentAttackPress] baseIn)

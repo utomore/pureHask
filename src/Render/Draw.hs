@@ -20,11 +20,13 @@ import Linear (V2(..), V4(..), norm)
 import Core.Components
 import Core.Config
 import Core.Types
+import Enemy.Script (EnemyDef(..))
 import Items.Registry (ItemRegistry, lookupItem, defColor)
 import Npc.Core (NpcAi(..))
 import Npc.Script (NpcDef(..))
-import Render.Font (drawText, textWidth)
+import Render.Font (FontSet(..), drawText, textWidth)
 import Render.Layers (renderLayerSlots)
+import Sim.ParticleCore (Particle(..))
 import World.Scene (SceneDef, backSlots, frontSlots)
 import World.Tilemap
 
@@ -43,9 +45,10 @@ cameraOffset tilemap (V2 px py) = V2 camX camY
 
 -- | Draw the full game scene: back parallax layers, tiles, entities, VFX,
 --   player, then the front parallax layers (see "World.Scene").
-renderScene :: SDL.Renderer -> ItemRegistry -> M.Map NpcId NpcDef -> Tilemap
-            -> SceneDef -> Game ()
-renderScene renderer registry npcDefs tilemap scene = do
+renderScene :: FontSet -> ItemRegistry -> M.Map NpcId NpcDef
+            -> M.Map EnemyId EnemyDef -> Tilemap -> SceneDef -> Game ()
+renderScene fonts registry npcDefs enemyDefs tilemap scene = do
+  let renderer = fsRenderer fonts
   -- Camera follows the player.
   playerPositions <- cfold (\acc (Player, Position p) -> p : acc) []
   let playerPos = case playerPositions of
@@ -142,6 +145,17 @@ renderScene renderer registry npcDefs tilemap scene = do
         SDL.drawRect renderer (Just rect)
     ) ()
 
+  -- Particles (dust, sparks, sparkles); alpha fades with remaining life.
+  ParticleStore particles <- get global
+  liftIO $ forM_ particles $ \p -> do
+    let (r, g, b) = pColor p
+        chan = fromIntegral . max 0 . min (255 :: Int)
+        alpha = chan (round (255.0 * max 0.0 (min 1.0 (pLife p / pMaxLife p))))
+        sz = pSize p
+        rect = toSDLRect (pPos p - camOffset - pure (sz / 2.0)) (pure sz)
+    SDL.rendererDrawColor renderer $= V4 (chan r) (chan g) (chan b) alpha
+    SDL.fillRect renderer (Just rect)
+
   -- NPCs: body, name, chatter bubble, and an E hint when the player is close.
   cfoldM_ (\_ (Npc nid, NpcBrain ai, Position pos, Collider size) -> do
     let relativePos = pos - camOffset
@@ -158,20 +172,23 @@ renderScene renderer registry npcDefs tilemap scene = do
       let nameStr = T.unpack (ndName def)
           V2 rx ry = relativePos
           V2 w _ = size
-      liftIO $ drawText renderer (V4 170 190 215 220) 1.5
-        (V2 (rx + (w - textWidth 1.5 nameStr) / 2.0) (ry - 12.0)) nameStr
+      liftIO $ do
+        nameW <- textWidth fonts 1.5 nameStr
+        drawText fonts (V4 170 190 215 220) 1.5
+          (V2 (rx + (w - nameW) / 2.0) (ry - 12.0)) nameStr
 
     -- Chatter bubble.
     forM_ (naBubble ai) $ \(msg, _) -> do
       let txt = T.unpack msg
           V2 rx ry = relativePos
           V2 w _ = size
-          bx = rx + (w - textWidth 1.5 txt) / 2.0
+      txtW <- liftIO (textWidth fonts 1.5 txt)
+      let bx = rx + (w - txtW) / 2.0
           by = ry - 30.0
       SDL.rendererDrawColor renderer $= V4 12 16 26 220
       SDL.fillRect renderer
-        (Just (toSDLRect (V2 (bx - 6.0) (by - 4.0)) (V2 (textWidth 1.5 txt + 12.0) 16.0)))
-      liftIO $ drawText renderer (V4 230 235 245 255) 1.5 (V2 bx by) txt
+        (Just (toSDLRect (V2 (bx - 6.0) (by - 4.0)) (V2 (txtW + 12.0) 16.0)))
+      liftIO $ drawText fonts (V4 230 235 245 255) 1.5 (V2 bx by) txt
 
     -- Interaction hint.
     when (playerPos /= V2 0.0 0.0) $ do
@@ -179,8 +196,30 @@ renderScene renderer registry npcDefs tilemap scene = do
       when (d <= 56.0) $ do
         let V2 rx ry = relativePos
             V2 w _ = size
-        liftIO $ drawText renderer (V4 255 230 120 255) 2.0
+        liftIO $ drawText fonts (V4 255 230 120 255) 2.0
           (V2 (rx + w / 2.0 - 4.0) (ry - 26.0)) "E"
+    ) ()
+
+  -- Enemies: body in their definition colour, hp bar above when damaged.
+  cfoldM_ (\_ (Enemy eid, Position pos, Collider size, EnemyHp hp) -> do
+    let relativePos = pos - camOffset
+        rect = toSDLRect relativePos size
+        (r, g, b) = maybe (200, 80, 80) edColor (M.lookup eid enemyDefs)
+        chan = fromIntegral . max 0 . min (255 :: Int)
+    SDL.rendererDrawColor renderer $= V4 (chan r) (chan g) (chan b) 255
+    SDL.fillRect renderer (Just rect)
+    SDL.rendererDrawColor renderer $= V4 (chan (r + 60)) (chan (g + 60)) (chan (b + 60)) 255
+    SDL.drawRect renderer (Just rect)
+
+    forM_ (M.lookup eid enemyDefs) $ \def ->
+      when (hp < edHp def) $ do
+        let V2 w _ = size
+            frac = max 0.0 (hp / edHp def)
+            barPos = relativePos + V2 0.0 (-8.0)
+        SDL.rendererDrawColor renderer $= V4 12 16 26 230
+        SDL.fillRect renderer (Just (toSDLRect barPos (V2 w 4.0)))
+        SDL.rendererDrawColor renderer $= V4 220 60 70 255
+        SDL.fillRect renderer (Just (toSDLRect barPos (V2 (w * frac) 4.0)))
     ) ()
 
   -- Projectiles.
@@ -225,6 +264,7 @@ renderScene renderer registry npcDefs tilemap scene = do
 
         (bodyFill, bodyBorder) = case cstate of
           StateDashing _     -> (V4 220 240 255 255, V4 255 255 255 255)
+          StateDashJump      -> (V4 160 235 255 255, V4 255 255 255 255)
           StateThrust _      -> (V4 255 200 0 255,   V4 255 255 100 255)
           StatePlunge        -> (V4 200 220 255 255, V4 255 255 255 255)
           StateHookHanging _ -> (V4 0 255 170 255,   V4 100 255 220 255)

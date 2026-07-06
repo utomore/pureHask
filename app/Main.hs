@@ -7,16 +7,29 @@
 --     * intents          -> fixed-step simulation     (only in 'ModePlaying')
 --     * simulation facts -> "FRP.Network" 'netEvents' (mode reacts)
 --     * ECS world        -> "Render.Draw" / "Render.UI" / "Render.Menu"
+--
+--   Definition assets live in one hot-swappable 'GameDefs' bundle (see
+--   "Game.Assets"): the shell polls file timestamps about once a second and
+--   reloads the bundle in place — a broken edit keeps the old definitions
+--   and prints the error. @--validate@ runs the same pipeline headless.
 module Main where
 
-import Control.Monad (unless, when, foldM)
+import Control.Monad (unless, when, foldM, forM, forM_)
 import Data.IORef
+import Data.List (elemIndex, isSuffixOf, sort)
 import qualified Data.Map.Strict as M
 import qualified Data.Text as T
+import Data.Time.Clock (UTCTime)
 import Data.Word (Word32)
 import Apecs (runSystem, cfold)
+import SDL (($=))
 import qualified SDL
 import Linear (V2(..), V4(..))
+import System.Directory (doesDirectoryExist, getModificationTime, listDirectory)
+import System.Environment (getArgs)
+import System.Exit (exitFailure, exitSuccess)
+import System.FilePath ((</>))
+import System.IO (hSetBuffering, stdout, BufferMode(LineBuffering))
 
 import Core.Components (World, initWorld, Player(..), Backpack(..), Equipped(..),
                         Position(..), Collider(..))
@@ -24,18 +37,21 @@ import Core.Config
 import Core.Settings
 import Core.Types
 import FRP.Network
-import Items.Registry (ItemRegistry, loadRegistry, requireItem)
-import Npc.Script (NpcDef(..), loadNpcDir, npcItemRefs, npcQuestRefs)
+import Game.Assets (GameDefs(..), loadDefs)
+import Items.Registry (allItems, defId, requireItem)
 import Quest.Runtime (activeGoal)
-import Quest.Script (QuestDef(..), loadQuestDir, questItemRefs)
+import Quest.Script (QuestDef(..))
 import Render.Draw (renderScene)
-import Render.Font (drawText)
+import Render.Font (FontSet(..), Fonts, loadFonts, freeFonts, drawText)
 import Render.Hud (renderHud)
 import Render.Menu (renderMenu)
 import Render.UI (renderOverlay, renderBackpack)
 import Sim.Combat (controlPlayer)
+import Sim.Damage (resolveDamage)
+import Sim.Enemy (spawnEnemiesForLevel, stepEnemies)
 import Sim.Items (backpackRows)
 import Sim.Npc (spawnNpcsForLevel, stepNpcs, runNpcCommand, interactNearest)
+import Sim.Particles (tickParticles)
 import Sim.Physics (stepPhysics, tickVFX, updateProjectiles)
 import Save.Codec
 import Sim.Rules (applyIntents, checkRules, drainEvents, useItemById, equipById,
@@ -78,31 +94,39 @@ data LoadedLevel = LoadedLevel
   , llWorld :: !World
   }
 
--- | Everything the loop needs but that never changes per frame.
+-- | Everything the loop needs. Definitions sit behind an 'IORef' so a hot
+--   reload swaps them for the whole game (shell, simulation and network) at
+--   a frame boundary.
 data ShellCtx = ShellCtx
   { scNetwork     :: !GameNetwork
-  , scRegistry    :: !ItemRegistry
-  , scQuests      :: ![QuestDef]
-  , scNpcs        :: !(M.Map NpcId NpcDef)
+  , scDefsRef     :: !(IORef GameDefs)
   , scLevelFiles  :: ![FilePath]
   , scLevelRef    :: !(IORef LoadedLevel)
   , scQuitRef     :: !(IORef Bool)
   , scSettingsRef :: !(IORef Settings)
+  , scSaveEnv     :: !SaveEnv
+    -- ^ level names for the save codec (v2 stores names, not indices)
   , scSlotsRef    :: !(IORef (Maybe String, [Maybe String]))
     -- ^ cached save summaries (autosave, manual slots); disk is only read at
     --   startup and after a save/load, never per frame
   , scFrameRef    :: !(IORef (Int, RunStats, QuestLog))
     -- ^ level index, stats and quest log from the latest 'FrameOut', for
     --   save gathering
+  , scWatchRef    :: !(IORef (Word32, [(FilePath, UTCTime)], [(FilePath, UTCTime)]))
+    -- ^ hot reload: next poll time (SDL ticks), last seen definition-file
+    --   mtimes, last seen level/scene-file mtimes
   , scWindow      :: !SDL.Window
   , scRenderer    :: !SDL.Renderer
+  , scFonts       :: !Fonts
+    -- ^ TTF fonts loaded at startup; the pixel font needs no handle. The
+    --   active choice is read from the settings each frame.
   }
 
 -- | Re-read all save-slot summaries into the cache.
 refreshSlots :: ShellCtx -> IO ()
 refreshSlots ctx = do
   let summarize n = do
-        r <- readSlot n
+        r <- readSlot (scSaveEnv ctx) n
         pure $ case r of
           Just (Right sv) -> Just (slotSummary sv)
           Just (Left _)   -> Just "CORRUPT"
@@ -111,185 +135,314 @@ refreshSlots ctx = do
   manual <- mapM summarize [1, 2, 3]
   writeIORef (scSlotsRef ctx) (auto, manual)
 
--- | Create a fresh world for a level (including its NPCs). Worlds are cheap;
---   replacing the whole world is how level switching avoids entity-cleanup
---   bugs.
-instantiate :: M.Map NpcId NpcDef -> LevelData -> IO LoadedLevel
-instantiate npcDefs lvl = do
-  world <- initWorld
-  runSystem (spawnLevel lvl) world
-  runSystem (spawnNpcsForLevel npcDefs (T.pack (ldName lvl))) world
-  scene <- loadSceneFile ("assets/scenes/" <> ldName lvl <> ".scene")
-             >>= either fail pure
-  pure (LoadedLevel lvl scene world)
+-- | Create a fresh world for a level (including its NPCs and enemies).
+--   Worlds are cheap; replacing the whole world is how level switching
+--   avoids entity-cleanup bugs.
+tryInstantiate :: GameDefs -> LevelData -> IO (Either String LoadedLevel)
+tryInstantiate defs lvl = do
+  sceneR <- loadSceneFile ("assets/scenes/" <> ldName lvl <> ".scene")
+  case sceneR of
+    Left err -> pure (Left err)
+    Right scene -> do
+      world <- initWorld
+      runSystem (spawnLevel lvl) world
+      runSystem (spawnNpcsForLevel (gdNpcs defs) (T.pack (ldName lvl))) world
+      runSystem (spawnEnemiesForLevel (gdEnemies defs) (T.pack (ldName lvl))) world
+      pure (Right (LoadedLevel lvl scene world))
+
+instantiate :: GameDefs -> LevelData -> IO LoadedLevel
+instantiate defs lvl = tryInstantiate defs lvl >>= either fail pure
+
+-- | Discover levels and their base names; fails on an empty set or a level
+--   that does not even parse.
+discoverLevelSet :: IO ([FilePath], [String])
+discoverLevelSet = do
+  levelFiles <- discoverLevels
+  when (null levelFiles) $
+    fail ("no level files found in " <> levelDirectory)
+  levelNames <- forM levelFiles $ \path ->
+    loadLevelFile path >>= either fail (pure . ldName)
+  pure (levelFiles, levelNames)
 
 main :: IO ()
 main = do
+  -- Line-buffer the log so hot-reload / sanitize messages show up promptly
+  -- even when stdout is a pipe.
+  hSetBuffering stdout LineBuffering
+  args <- getArgs
+  if "--validate" `elem` args
+    then runValidate
+    else runGame
+
+-- | Headless validation: run the full asset pipeline for EVERY language and
+--   exit non-zero on the first problem. For content authors and CI.
+runValidate :: IO ()
+runValidate = do
+  (levelFiles, levelNames) <- discoverLevelSet
+  putStrLn ("levels: " <> show (length levelFiles) <> " OK")
+  results <- forM [minBound .. maxBound :: Language] $ \lang -> do
+    r <- loadDefs lang levelFiles levelNames
+    case r of
+      Left err -> do
+        putStrLn ("[" <> langCode lang <> "] FAILED: " <> err)
+        pure False
+      Right defs -> do
+        putStrLn ("[" <> langCode lang <> "] OK: "
+                  <> show (length (allItems (gdRegistry defs))) <> " items, "
+                  <> show (length (gdQuests defs)) <> " quests, "
+                  <> show (M.size (gdNpcs defs)) <> " npcs, "
+                  <> show (M.size (gdEnemies defs)) <> " enemies")
+        pure True
+  if and results then exitSuccess else exitFailure
+
+runGame :: IO ()
+runGame = do
   SDL.initializeAll
+  -- Linear filtering when the logical 800x600 canvas is scaled to a resized
+  -- window; solid-colour rects are unaffected, text stays smooth.
+  SDL.HintRenderScaleQuality $= SDL.ScaleLinear
   window <- SDL.createWindow "pureHask" SDL.defaultWindow
-    { SDL.windowInitialSize = V2 (round screenWidth) (round screenHeight) }
+    { SDL.windowInitialSize = V2 (round screenWidth) (round screenHeight)
+    , SDL.windowResizable   = True
+    }
   renderer <- SDL.createRenderer window (-1) SDL.defaultRenderer
     { SDL.rendererType          = SDL.AcceleratedVSyncRenderer
     , SDL.rendererTargetTexture = False
     }
+  -- The game always draws in its logical 800x600 coordinate space; SDL
+  -- scales it to whatever size the (resizable) window currently has.
+  SDL.rendererLogicalSize renderer $=
+    Just (V2 (round screenWidth) (round screenHeight))
 
-  -- Load the item database, then cross-validate every level file against it
-  -- BEFORE the game starts: a typo in assets aborts the launch with a clear
-  -- message instead of surfacing mid-play.
-  registry <- loadRegistry "assets/items/items.def" >>= either fail pure
+  fonts <- loadFonts "assets/fonts/NotoSansTC.ttf"
 
-  levelFiles <- discoverLevels
-  when (null levelFiles) $
-    fail ("no level files found in " <> levelDirectory)
-  mapM_ (validateLevel registry) levelFiles
-
-  -- Quest and NPC scripts: compile, then cross-validate every reference
-  -- (items, quest ids, level names) before the game starts.
-  quests <- loadQuestDir "assets/quests" >>= either fail pure
-  npcList <- loadNpcDir "assets/npcs" >>= either fail pure
-  levelNames <- mapM (fmap (either (const "") ldName) . loadLevelFile) levelFiles
-  let questIds = map qdId quests
-      npcDefs = M.fromList [ (ndId nd, nd) | nd <- npcList ]
-      validation = do
-        mapM_ (\qd -> mapM_ (requireItem registry "quest") (questItemRefs qd)) quests
-        mapM_ (\nd -> mapM_ (requireItem registry "npc") (npcItemRefs nd)) npcList
-        mapM_ (\nd -> mapM_ (\q ->
-                 if q `elem` questIds
-                   then Right ()
-                   else Left ("npc references unknown quest " <> show q))
-               (npcQuestRefs nd)) npcList
-        mapM_ (\nd ->
-                 if ndLevel nd `elem` map (\n -> T.pack n) levelNames
-                   then Right ()
-                   else Left ("npc '" <> show (ndId nd)
-                              <> "' spawns in unknown level " <> show (ndLevel nd)))
-              npcList
-  case validation of
-    Left err -> fail ("script validation failed: " <> err)
-    Right () -> pure ()
-
+  -- Settings first: the chosen language decides which string table every
+  -- content compiler resolves text keys against. All loading + cross
+  -- validation lives in Game.Assets (shared with hot reload / --validate).
   settings <- loadSettings
+  (levelFiles, levelNames) <- discoverLevelSet
+  defs0 <- loadDefs (setLang settings) levelFiles levelNames
+             >>= either fail pure
+  defsRef <- newIORef defs0
+
   applyDisplaySettings window settings
 
-  network <- buildNetwork (length levelFiles) quests npcDefs
+  network <- buildNetwork defsRef (length levelFiles)
 
   -- Load the first level immediately so the title screen has a scene behind it.
-  first <- loadLevel npcDefs levelFiles 0
+  first <- loadLevelIx defs0 levelFiles 0
   levelRef <- newIORef first
   quitRef <- newIORef False
   settingsRef <- newIORef settings
   slotsRef <- newIORef (Nothing, [Nothing, Nothing, Nothing])
   frameRef <- newIORef (0, emptyRunStats, emptyQuestLog)
+  mtimes0 <- watchedMtimes (setLang settings)
+  lvlMtimes0 <- watchedLevelMtimes
+  watchRef <- newIORef (0, mtimes0, lvlMtimes0)
 
   let ctx = ShellCtx
-        { scNetwork = network, scRegistry = registry, scQuests = quests
-        , scNpcs = npcDefs, scLevelFiles = levelFiles
+        { scNetwork = network, scDefsRef = defsRef, scLevelFiles = levelFiles
+        , scSaveEnv = SaveEnv levelNames
         , scLevelRef = levelRef, scQuitRef = quitRef, scSettingsRef = settingsRef
-        , scSlotsRef = slotsRef, scFrameRef = frameRef
-        , scWindow = window, scRenderer = renderer
+        , scSlotsRef = slotsRef, scFrameRef = frameRef, scWatchRef = watchRef
+        , scWindow = window, scRenderer = renderer, scFonts = fonts
         }
 
   refreshSlots ctx
   startTime <- SDL.ticks
   gameLoop ctx startTime emptyRawInput 0.0 [] 60.0
 
+  freeFonts fonts
   SDL.destroyRenderer renderer
   SDL.destroyWindow window
   SDL.quit
 
--- | Startup validation: every item marker in a level must exist in the item
---   registry.
-validateLevel :: ItemRegistry -> FilePath -> IO ()
-validateLevel registry path = do
-  parsed <- loadLevelFile path
-  case parsed of
-    Left err  -> fail ("level validation failed: " <> err)
-    Right lvl ->
-      case mapM (requireItem registry (ldName lvl) . snd) (ldItems lvl) of
-        Left err -> fail ("level validation failed: " <> err)
-        Right _  -> pure ()
-
 -- | Load and instantiate a level by index; invalid level files abort with the
 --   parser's error message.
-loadLevel :: M.Map NpcId NpcDef -> [FilePath] -> Int -> IO LoadedLevel
-loadLevel npcDefs files ix = do
+loadLevelIx :: GameDefs -> [FilePath] -> Int -> IO LoadedLevel
+loadLevelIx defs files ix = do
   parsed <- loadLevelFile (files !! ix)
   case parsed of
     Left err  -> fail ("level load failed: " <> err)
-    Right lvl -> instantiate npcDefs lvl
+    Right lvl -> instantiate defs lvl
 
 applyDisplaySettings :: SDL.Window -> Settings -> IO ()
 applyDisplaySettings window s =
   SDL.setWindowMode window
     (if setFullscreen s then SDL.FullscreenDesktop else SDL.Windowed)
 
+--------------------------------------------------------------------------------
+-- Hot reload
+--------------------------------------------------------------------------------
+
+-- | Every definition file the hot reload watches. Levels and scenes are
+--   deliberately absent: changing them mid-run means rebuilding worlds.
+watchedMtimes :: Language -> IO [(FilePath, UTCTime)]
+watchedMtimes lang = do
+  let dirs = ["assets/quests", "assets/npcs", "assets/enemies"]
+      singles = [ "assets/items/items.def"
+                , "assets/lang" </> (langCode lang <> ".lang")
+                ]
+  dirFiles <- fmap concat . forM dirs $ \dir -> do
+    exists <- doesDirectoryExist dir
+    if exists
+      then map (dir </>) <$> listDirectory dir
+      else pure []
+  forM (singles <> dirFiles) $ \path -> do
+    t <- getModificationTime path
+    pure (path, t)
+
+-- | The level and scene files (for rebuilding the CURRENT level on edit).
+watchedLevelMtimes :: IO [(FilePath, UTCTime)]
+watchedLevelMtimes = do
+  let dirs = [(levelDirectory, ".txt"), ("assets/scenes", ".scene")]
+  files <- fmap concat . forM dirs $ \(dir, ext) -> do
+    exists <- doesDirectoryExist dir
+    if exists
+      then map (dir </>) . sort . filter (ext `isSuffixOf`)
+             <$> listDirectory dir
+      else pure []
+  forM files $ \path -> do
+    t <- getModificationTime path
+    pure (path, t)
+
+-- | Poll the watched files about once a second; on any change re-run the
+--   relevant pipeline. A broken edit keeps the old data (and says so) —
+--   content iteration must never crash a running game.
+checkHotReload :: ShellCtx -> Word32 -> IO ()
+checkHotReload ctx now = do
+  (nextAt, defsBefore, lvlBefore) <- readIORef (scWatchRef ctx)
+  when (now >= nextAt) $ do
+    settings <- readIORef (scSettingsRef ctx)
+    defsAfter <- watchedMtimes (setLang settings)
+    lvlAfter <- watchedLevelMtimes
+    writeIORef (scWatchRef ctx) (now + 1000, defsAfter, lvlAfter)
+    when (defsAfter /= defsBefore) $ do
+      result <- loadDefs (setLang settings) (scLevelFiles ctx)
+                  (seLevelNames (scSaveEnv ctx))
+      case result of
+        Right defs -> do
+          writeIORef (scDefsRef ctx) defs
+          putStrLn "[hot-reload] definitions reloaded"
+        Left err ->
+          putStrLn ("[hot-reload] " <> err <> " -- keeping the old definitions")
+    when (lvlAfter /= lvlBefore) $
+      reloadCurrentLevel ctx
+
+-- | A level or scene file changed: rebuild the CURRENT level's world from
+--   disk, carrying the player's inventory/vitals over (position resets to
+--   the spawn point — the terrain may have changed under their feet).
+--   Adding or removing level FILES needs a restart: the level count is
+--   baked into the flow machine and the save codec.
+reloadCurrentLevel :: ShellCtx -> IO ()
+reloadCurrentLevel ctx = do
+  files <- discoverLevels
+  if files /= scLevelFiles ctx
+    then putStrLn "[hot-reload] level files were added/removed -- restart to pick them up"
+    else do
+      defs <- readIORef (scDefsRef ctx)
+      LoadedLevel oldLvl _ oldWorld <- readIORef (scLevelRef ctx)
+      let ix = maybe 0 id (elemIndex (ldName oldLvl) (seLevelNames (scSaveEnv ctx)))
+      parsed <- loadLevelFile (scLevelFiles ctx !! ix)
+      case parsed >>= checkMarkers defs of
+        Left err ->
+          putStrLn ("[hot-reload] " <> err <> " -- keeping the old level")
+        Right lvl -> do
+          mPersist <- runSystem capturePlayer oldWorld
+          rebuilt <- tryInstantiate defs lvl
+          case rebuilt of
+            Left err ->
+              putStrLn ("[hot-reload] " <> err <> " -- keeping the old level")
+            Right loaded@(LoadedLevel _ _ newWorld) -> do
+              forM_ mPersist $ \p -> runSystem (applyPlayer p) newWorld
+              writeIORef (scLevelRef ctx) loaded
+              putStrLn ("[hot-reload] level '" <> ldName lvl <> "' rebuilt")
+  where
+    checkMarkers defs lvl =
+      case mapM (requireItem (gdRegistry defs) (ldName lvl) . snd) (ldItems lvl) of
+        Left err -> Left err
+        Right _  -> Right lvl
+
+--------------------------------------------------------------------------------
+-- Commands
+--------------------------------------------------------------------------------
+
 -- | Execute the flow layer's commands.
 runCommand :: ShellCtx -> FlowCommand -> IO ()
-runCommand ctx cmd = case cmd of
-  CmdNewGame ->
-    loadLevel (scNpcs ctx) (scLevelFiles ctx) 0 >>= writeIORef (scLevelRef ctx)
-  CmdLoadLevel ix -> do
-    -- Carry the persistent player state (backpack, gear, vitals) over into
-    -- the freshly built world of the next level.
-    LoadedLevel _ _ oldWorld <- readIORef (scLevelRef ctx)
-    mPersist <- runSystem capturePlayer oldWorld
-    loaded@(LoadedLevel _ _ newWorld) <- loadLevel (scNpcs ctx) (scLevelFiles ctx) ix
-    case mPersist of
-      Just persist -> runSystem (applyPlayer persist) newWorld
-      Nothing      -> pure ()
-    writeIORef (scLevelRef ctx) loaded
-  CmdSaveGame slot -> do
-    LoadedLevel _ _ world <- readIORef (scLevelRef ctx)
-    mPersist <- runSystem capturePlayer world
-    (levelIx, stats, qlog) <- readIORef (scFrameRef ctx)
-    case mPersist of
-      Nothing -> pure ()
-      Just persist -> do
-        writeSlot slot (SaveGame currentSaveVersion levelIx stats persist qlog)
-        refreshSlots ctx
-  CmdLoadGame slot -> do
-    result <- readSlot slot
-    case result of
-      Just (Right sv) -> do
-        loaded@(LoadedLevel _ _ newWorld) <-
-          loadLevel (scNpcs ctx) (scLevelFiles ctx) (svLevel sv)
-        runSystem (applyPlayer (svPlayer sv)) newWorld
-        writeIORef (scLevelRef ctx) loaded
-        -- Tell the flow and quest machines to adopt the loaded progress.
-        out <- netEvents (scNetwork ctx)
-                 [EvRunRestored (svLevel sv) (svStats sv) (svQuests sv)]
-        mapM_ (runCommand ctx) (eoCommands out)
-      _ -> pure ()  -- empty or corrupt slot: the menu already shows it
-  CmdRespawnPlayer -> do
-    LoadedLevel lvl _ world <- readIORef (scLevelRef ctx)
-    runSystem (respawnPlayer (ldPlayerSpawn lvl)) world
-  CmdUseItem iid -> do
-    LoadedLevel _ _ world <- readIORef (scLevelRef ctx)
-    runSystem (useItemById (scRegistry ctx) iid) world
-  CmdEquip iid -> do
-    LoadedLevel _ _ world <- readIORef (scLevelRef ctx)
-    runSystem (equipById (scRegistry ctx) iid) world
-  CmdUnequip slot -> do
-    LoadedLevel _ _ world <- readIORef (scLevelRef ctx)
-    runSystem (unequipBySlot (scRegistry ctx) slot) world
-  CmdToggleSetting ix -> do
-    s <- readIORef (scSettingsRef ctx)
-    let s' = toggleSetting ix s
-    writeIORef (scSettingsRef ctx) s'
-    saveSettings s'
-    applyDisplaySettings (scWindow ctx) s'
-  CmdQuit -> writeIORef (scQuitRef ctx) True
+runCommand ctx cmd = do
+  defs <- readIORef (scDefsRef ctx)
+  case cmd of
+    CmdNewGame ->
+      loadLevelIx defs (scLevelFiles ctx) 0 >>= writeIORef (scLevelRef ctx)
+    CmdLoadLevel ix -> do
+      -- Carry the persistent player state (backpack, gear, vitals) over into
+      -- the freshly built world of the next level.
+      LoadedLevel _ _ oldWorld <- readIORef (scLevelRef ctx)
+      mPersist <- runSystem capturePlayer oldWorld
+      loaded@(LoadedLevel _ _ newWorld) <- loadLevelIx defs (scLevelFiles ctx) ix
+      case mPersist of
+        Just persist -> runSystem (applyPlayer persist) newWorld
+        Nothing      -> pure ()
+      writeIORef (scLevelRef ctx) loaded
+    CmdSaveGame slot -> do
+      LoadedLevel _ _ world <- readIORef (scLevelRef ctx)
+      mPersist <- runSystem capturePlayer world
+      (levelIx, stats, qlog) <- readIORef (scFrameRef ctx)
+      case mPersist of
+        Nothing -> pure ()
+        Just persist -> do
+          writeSlot (scSaveEnv ctx) slot
+            (SaveGame currentSaveVersion levelIx stats persist qlog)
+          refreshSlots ctx
+    CmdLoadGame slot -> do
+      result <- readSlot (scSaveEnv ctx) slot
+      case result of
+        Just (Right sv0) -> do
+          -- Drop/clamp references to content that changed since the save was
+          -- written; every adjustment is reported, never silent.
+          let knownQuests = [ (qdId qd, length (qdStages qd)) | qd <- gdQuests defs ]
+              knownItems = map defId (allItems (gdRegistry defs))
+              (sv, warns) = sanitizeSave knownQuests knownItems sv0
+          mapM_ putStrLn warns
+          loaded@(LoadedLevel _ _ newWorld) <-
+            loadLevelIx defs (scLevelFiles ctx) (svLevel sv)
+          runSystem (applyPlayer (svPlayer sv)) newWorld
+          writeIORef (scLevelRef ctx) loaded
+          -- Tell the flow and quest machines to adopt the loaded progress.
+          out <- netEvents (scNetwork ctx)
+                   [EvRunRestored (svLevel sv) (svStats sv) (svQuests sv)]
+          mapM_ (runCommand ctx) (eoCommands out)
+        _ -> pure ()  -- empty or corrupt slot: the menu already shows it
+    CmdRespawnPlayer -> do
+      LoadedLevel lvl _ world <- readIORef (scLevelRef ctx)
+      runSystem (respawnPlayer (ldPlayerSpawn lvl)) world
+    CmdUseItem iid -> do
+      LoadedLevel _ _ world <- readIORef (scLevelRef ctx)
+      runSystem (useItemById (gdRegistry defs) iid) world
+    CmdEquip iid -> do
+      LoadedLevel _ _ world <- readIORef (scLevelRef ctx)
+      runSystem (equipById (gdRegistry defs) iid) world
+    CmdUnequip slot -> do
+      LoadedLevel _ _ world <- readIORef (scLevelRef ctx)
+      runSystem (unequipBySlot (gdRegistry defs) slot) world
+    CmdToggleSetting ix -> do
+      s <- readIORef (scSettingsRef ctx)
+      let s' = toggleSetting ix s
+      writeIORef (scSettingsRef ctx) s'
+      saveSettings s'
+      applyDisplaySettings (scWindow ctx) s'
+    CmdQuit -> writeIORef (scQuitRef ctx) True
 
 -- | Snapshot the world data the menu can act on.
-buildMenuEnv :: ShellCtx -> IO MenuEnv
-buildMenuEnv ctx = do
+buildMenuEnv :: ShellCtx -> GameDefs -> IO MenuEnv
+buildMenuEnv ctx defs = do
   LoadedLevel _ _ world <- readIORef (scLevelRef ctx)
   backpacks <- runSystem (cfold (\acc (Player, Backpack b) -> b : acc) []) world
   equippedL <- runSystem (cfold (\acc (Player, Equipped e) -> e : acc) []) world
   settings <- readIORef (scSettingsRef ctx)
   (auto, manual) <- readIORef (scSlotsRef ctx)
   let rows = case backpacks of
-        (b : _) -> backpackRows (scRegistry ctx) b
+        (b : _) -> backpackRows (gdRegistry defs) b
         []      -> []
       equipped = case equippedL of
         (e : _) -> e
@@ -325,11 +478,14 @@ gameLoop ctx lastTime rawInput acc pending fps = do
   let dt = fromIntegral (currentTime - lastTime) / 1000.0
       fps' = if dt > 0.0 then fps * 0.95 + (1.0 / dt) * 0.05 else fps
 
+  checkHotReload ctx currentTime
+  defs <- readIORef (scDefsRef ctx)
+
   events <- SDL.pollEvents
   let (sdlQuit, rawInput') = processEvents events rawInput
 
   -- 1. Fire the frame into the network: intents + flow state out.
-  menuEnv <- buildMenuEnv ctx
+  menuEnv <- buildMenuEnv ctx defs
   worldSnap <- buildWorldSnapshot ctx
   frame <- netFrame (scNetwork ctx) dt rawInput' menuEnv worldSnap
   writeIORef (scFrameRef ctx) (foLevel frame, foStats frame, foQuests frame)
@@ -350,9 +506,12 @@ gameLoop ctx lastTime rawInput acc pending fps = do
         (\intents _ -> do
             runSystem (do
               controlPlayer (FrameInput intents held) simStep
-              stepNpcs (scNpcs ctx) simStep
+              stepNpcs (gdNpcs defs) simStep
+              stepEnemies (gdEnemies defs) simStep
               stepPhysics tilemap simStep
+              resolveDamage (gdEnemies defs) simStep
               tickVFX simStep
+              tickParticles simStep
               updateProjectiles tilemap simStep
               ) world
             -- Intents are one-shot: only the first sub-step sees them.
@@ -362,7 +521,7 @@ gameLoop ctx lastTime rawInput acc pending fps = do
 
       -- Frame-rate-independent rules run once per frame.
       runSystem (do
-        applyIntents (scRegistry ctx) (foInput frame)
+        applyIntents (gdRegistry defs) (foInput frame)
         when (IntentInteract `elem` fiIntents (foInput frame)) interactNearest
         checkRules (ldGoal lvl) (mapPixelHeight tilemap)
         ) world
@@ -373,7 +532,7 @@ gameLoop ctx lastTime rawInput acc pending fps = do
       unless (null evs) $ do
         out <- netEvents (scNetwork ctx) evs
         runSystem
-          (mapM_ (\wc -> runWorldCommand wc >> runNpcCommand (scNpcs ctx) wc)
+          (mapM_ (\wc -> runWorldCommand wc >> runNpcCommand (gdNpcs defs) wc)
                  (eoWorldCmds out))
           world
         mapM_ (runCommand ctx) (eoCommands out)
@@ -383,26 +542,29 @@ gameLoop ctx lastTime rawInput acc pending fps = do
     -- Any non-playing mode: freeze the simulation and drop stale time.
     _ -> return (0.0, [])
 
-  -- 4. Render: scene, in-game overlays, mode overlay.
+  -- 4. Render: scene, in-game overlays, mode overlay. All text goes through
+  --    a per-frame FontSet so the FONT setting takes effect immediately.
+  settings <- readIORef (scSettingsRef ctx)
+  let fonts = FontSet renderer (setFont settings) (scFonts ctx)
   LoadedLevel lvl scene world <- readIORef (scLevelRef ctx)
   runSystem
-    (renderScene renderer (scRegistry ctx) (scNpcs ctx) (ldTilemap lvl) scene)
+    (renderScene fonts (gdRegistry defs) (gdNpcs defs) (gdEnemies defs)
+       (ldTilemap lvl) scene)
     world
   when (foMode frame == ModePlaying) $ do
-    let tracker = activeGoal (scQuests ctx) (foQuests frame)
-    runSystem (renderHud renderer (foToasts frame) tracker) world
-    runSystem (renderBackpack renderer (scRegistry ctx)) world
+    let tracker = activeGoal (gdQuests defs) (foQuests frame)
+    runSystem (renderHud fonts (foToasts frame) tracker) world
+    runSystem (renderBackpack fonts (gdRegistry defs)) world
   when (foMode frame == ModeMenu) $
     runSystem
-      (renderMenu renderer (scRegistry ctx) (ldTilemap lvl)
+      (renderMenu fonts (gdRegistry defs) (ldTilemap lvl)
          (foMenu frame) menuEnv (foStats frame) (foLevel frame)
-         (scQuests ctx) (foQuests frame))
+         (gdQuests defs) (foQuests frame))
       world
-  renderOverlay renderer (foMode frame) (foStats frame) (foLevel frame)
+  renderOverlay fonts (foMode frame) (foStats frame) (foLevel frame)
 
-  settings <- readIORef (scSettingsRef ctx)
   when (setShowFps settings) $
-    drawText renderer (V4 120 150 190 220) 2.0 (V2 (screenWidth - 90.0) 34.0)
+    drawText fonts (V4 120 150 190 220) 2.0 (V2 (screenWidth - 90.0) 34.0)
       ("FPS " <> show (round fps' :: Int))
 
   SDL.present renderer

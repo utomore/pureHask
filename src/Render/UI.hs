@@ -29,23 +29,25 @@ dimScreen renderer (V4 r g b a) = do
   SDL.fillRect renderer (Just (toSDLRect (V2 0 0) (V2 screenWidth screenHeight)))
 
 -- | Horizontally centered text.
-centered :: SDL.Renderer -> V4 Int -> Double -> Double -> String -> IO ()
-centered renderer color scale y str =
-  drawText renderer color scale (V2 ((screenWidth - textWidth scale str) / 2.0) y) str
+centered :: FontSet -> V4 Int -> Double -> Double -> String -> IO ()
+centered fonts color scale y str = do
+  w <- textWidth fonts scale str
+  drawText fonts color scale (V2 ((screenWidth - w) / 2.0) y) str
 
 -- | Draw the overlay matching the current mode.
-renderOverlay :: SDL.Renderer -> GameMode -> RunStats -> Int -> IO ()
-renderOverlay renderer mode stats levelIx = case mode of
+renderOverlay :: FontSet -> GameMode -> RunStats -> Int -> IO ()
+renderOverlay fonts mode stats levelIx = case mode of
   ModeTitle -> do
     dimScreen renderer (V4 10 14 24 235)
-    centered renderer (V4 0 220 220 255) 10.0 160.0 "PUREHASK"
-    centered renderer (V4 160 190 220 255) 3.0 300.0 "PRESS SPACE TO START"
-    centered renderer (V4 90 110 140 255) 2.5 360.0 "ESC TO QUIT"
+    centered fonts (V4 0 220 220 255) 10.0 160.0 "PUREHASK"
+    centered fonts (V4 160 190 220 255) 3.0 300.0 "PRESS SPACE TO START"
+    centered fonts (V4 90 110 140 255) 2.5 360.0 "ESC TO QUIT"
 
   ModePlaying -> do
     let label = "LEVEL " <> show (levelIx + 1)
-    drawText renderer (V4 120 150 190 200) 2.0
-      (V2 (screenWidth - textWidth 2.0 label - 12.0) 12.0) label
+    w <- textWidth fonts 2.0 label
+    drawText fonts (V4 120 150 190 200) 2.0
+      (V2 (screenWidth - w - 12.0) 12.0) label
 
   -- The menu is drawn by "Render.Menu"; nothing extra here.
   ModeMenu -> return ()
@@ -60,28 +62,30 @@ renderOverlay renderer mode stats levelIx = case mode of
       SDL.fillRect renderer (Just (toSDLRect boxPos boxSize))
       SDL.rendererDrawColor renderer $= V4 58 74 102 255
       SDL.drawRect renderer (Just (toSDLRect boxPos boxSize))
-      drawText renderer (V4 255 230 120 255) 2.0 (boxPos + V2 16.0 12.0)
+      drawText fonts (V4 255 230 120 255) 2.0 (boxPos + V2 16.0 12.0)
         (T.unpack speaker)
-      drawText renderer (V4 220 230 245 255) 2.5 (boxPos + V2 16.0 40.0)
+      drawText fonts (V4 220 230 245 255) 2.5 (boxPos + V2 16.0 40.0)
         (T.unpack line)
-      drawText renderer (V4 110 130 160 255) 1.5 (boxPos + V2 16.0 74.0)
+      drawText fonts (V4 110 130 160 255) 1.5 (boxPos + V2 16.0 74.0)
         "SPACE: NEXT"
 
   ModeDead _ -> do
     dimScreen renderer (V4 60 10 20 150)
-    centered renderer (V4 255 90 110 255) 6.0 260.0 "YOU DIED"
+    centered fonts (V4 255 90 110 255) 6.0 260.0 "YOU DIED"
 
   ModeLevelComplete _ -> do
     dimScreen renderer (V4 10 30 24 150)
-    centered renderer (V4 120 255 190 255) 5.0 260.0 "LEVEL COMPLETE"
+    centered fonts (V4 120 255 190 255) 5.0 260.0 "LEVEL COMPLETE"
 
   ModeEnding -> do
     dimScreen renderer (V4 10 14 24 235)
-    centered renderer (V4 255 220 120 255) 8.0 140.0 "THE END"
-    centered renderer (V4 200 215 235 255) 3.0 280.0 ("TIME " <> formatTime (statTime stats))
-    centered renderer (V4 200 215 235 255) 3.0 320.0 ("DEATHS " <> show (statDeaths stats))
-    centered renderer (V4 200 215 235 255) 3.0 360.0 ("ITEMS " <> show (statItems stats))
-    centered renderer (V4 90 110 140 255) 2.5 430.0 "SPACE TO TITLE"
+    centered fonts (V4 255 220 120 255) 8.0 140.0 "THE END"
+    centered fonts (V4 200 215 235 255) 3.0 280.0 ("TIME " <> formatTime (statTime stats))
+    centered fonts (V4 200 215 235 255) 3.0 320.0 ("DEATHS " <> show (statDeaths stats))
+    centered fonts (V4 200 215 235 255) 3.0 360.0 ("ITEMS " <> show (statItems stats))
+    centered fonts (V4 90 110 140 255) 2.5 430.0 "SPACE TO TITLE"
+  where
+    renderer = fsRenderer fonts
 
 formatTime :: Double -> String
 formatTime t =
@@ -90,8 +94,8 @@ formatTime t =
   in printf "%02d:%02d" m s
 
 -- | The backpack overlay (toggled with I while playing).
-renderBackpack :: SDL.Renderer -> ItemRegistry -> Game ()
-renderBackpack renderer registry = do
+renderBackpack :: FontSet -> ItemRegistry -> Game ()
+renderBackpack fonts registry = do
   UIState shown <- get global
   when shown $ do
     backpacks <- cfold (\acc (Player, Backpack b) -> b : acc) []
@@ -100,12 +104,13 @@ renderBackpack renderer registry = do
           []      -> []
 
     liftIO $ do
-      let uiRect = toSDLRect (V2 580.0 40.0) (V2 180.0 320.0)
+      let renderer = fsRenderer fonts
+          uiRect = toSDLRect (V2 580.0 40.0) (V2 180.0 320.0)
       SDL.rendererDrawColor renderer $= V4 25 35 50 220
       SDL.fillRect renderer (Just uiRect)
       SDL.rendererDrawColor renderer $= V4 58 74 102 255
       SDL.drawRect renderer (Just uiRect)
-      drawText renderer (V4 160 190 220 255) 2.0 (V2 600.0 48.0) "BACKPACK"
+      drawText fonts (V4 160 190 220 255) 2.0 (V2 600.0 48.0) "BACKPACK"
 
       forM_ (zip [(0 :: Int) .. 4] (map Just items ++ repeat Nothing)) $ \(idx, mItem) -> do
         let slotY = 72.0 + fromIntegral idx * 56.0
@@ -124,8 +129,8 @@ renderBackpack renderer registry = do
             SDL.rendererDrawColor renderer $= border
             SDL.drawRect renderer (Just iconRect)
             when (count > 1) $
-              drawText renderer (V4 255 255 255 255) 1.5 (V2 604.0 (slotY + 30.0))
+              drawText fonts (V4 255 255 255 255) 1.5 (V2 604.0 (slotY + 30.0))
                 ("X" <> show count)
-            drawText renderer (V4 150 170 200 255) 1.5 (V2 646.0 (slotY + 16.0))
+            drawText fonts (V4 150 170 200 255) 1.5 (V2 646.0 (slotY + 16.0))
               (T.unpack (itemDisplayName registry item))
           Nothing -> return ()

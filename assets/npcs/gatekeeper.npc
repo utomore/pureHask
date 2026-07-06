@@ -1,0 +1,16 @@
+;; 守門人:深淵之門前的最後一個 NPC(關卡 05)。
+
+(npc gatekeeper
+  (name npc.gatekeeper.name)
+  (color 200 120 200)
+  (size 24 36)
+  (spawn-at 05-abyssgate 8 13)
+  (movement (patrol 7 10) (speed 25) (pause 3.0))
+  (chatter 11 npc.gatekeeper.chat.1 npc.gatekeeper.chat.2)
+  (dialogue
+    (rule (quest-state find-key done)
+      (say gatekeeper npc.gatekeeper.done.1 npc.gatekeeper.done.2))
+    (default
+      (say gatekeeper npc.gatekeeper.hello.1
+                      npc.gatekeeper.hello.2
+                      npc.gatekeeper.hello.3))))

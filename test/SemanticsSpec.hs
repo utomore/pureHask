@@ -29,6 +29,15 @@ spec = do
             ]
       frames `shouldBe` [[IntentJump], [], []]
 
+    it "fires IntentInteract on the E press frame only" $ do
+      -- Regression: this rule was missing, so E never talked to NPCs.
+      let frames = runFrames
+            [ (0.016, key (\r -> r { rawInteract = True }))
+            , (0.016, key (\r -> r { rawInteract = True }))  -- still held
+            , (0.016, emptyRawInput)
+            ]
+      frames `shouldBe` [[IntentInteract], [], []]
+
     it "fires attack press and release separately" $ do
       let frames = runFrames
             [ (0.016, key (\r -> r { rawAttack = True }))
