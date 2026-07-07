@@ -188,6 +188,18 @@ doubleTapWindow :: Double
 doubleTapWindow = 0.22
 
 --------------------------------------------------------------------------------
+-- Talents
+--------------------------------------------------------------------------------
+
+-- | Enemies defeated per talent point (kill-milestone acquisition).
+talentKillsPerPoint :: Int
+talentKillsPerPoint = 5
+
+-- | Talent points granted for clearing a level.
+talentPointsPerClear :: Int
+talentPointsPerClear = 1
+
+--------------------------------------------------------------------------------
 -- Game flow
 --------------------------------------------------------------------------------
 

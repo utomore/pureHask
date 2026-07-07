@@ -16,6 +16,7 @@ import Control.Monad (forM_, unless)
 import qualified Data.Map.Strict as M
 import qualified Data.Text as T
 
+import Audio.Script (AudioDefs, loadAudioFile, audioLevelRefs)
 import Core.Lang (LangTable, loadLang, langLookup)
 import Core.Settings (Language, langCode)
 import Core.Types
@@ -24,6 +25,8 @@ import Items.Registry (ItemRegistry, loadRegistry, requireItem)
 import Npc.Script (NpcDef(..), loadNpcDir, npcItemRefs, npcQuestRefs)
 import Quest.Runtime (QuestText(..))
 import Quest.Script (QuestDef(..), loadQuestDir, questItemRefs, questEnemyRefs)
+import Sprite.Script (SpriteDef(..), loadSpriteDir)
+import Talent.Script (TalentDef(..), loadTalentFile)
 import World.Level (loadLevelFile, LevelData(..))
 import World.Scene (loadSceneFile)
 
@@ -34,6 +37,9 @@ data GameDefs = GameDefs
   , gdQuests    :: ![QuestDef]
   , gdNpcs      :: !(M.Map NpcId NpcDef)
   , gdEnemies   :: !(M.Map EnemyId EnemyDef)
+  , gdTalents   :: ![TalentDef]   -- ^ in definition (= display) order
+  , gdSprites   :: !(M.Map T.Text SpriteDef)
+  , gdAudio     :: !AudioDefs
   , gdQuestText :: !QuestText
   }
 
@@ -50,6 +56,9 @@ loadDefs lang levelFiles levelNames = do
       questsR <- loadQuestDir table "assets/quests"
       npcsR <- loadNpcDir table "assets/npcs"
       enemiesR <- loadEnemyDir table "assets/enemies"
+      talentsR <- loadTalentFile table "assets/talents/talents.def"
+      spritesR <- loadSpriteDir "assets/sprites" "assets/textures"
+      audioR <- loadAudioFile "assets/audio"
       levelChecks <- mapM checkLevel levelFiles
       sceneChecks <- mapM checkScene levelNames
       pure $ do
@@ -57,18 +66,29 @@ loadDefs lang levelFiles levelNames = do
         quests <- questsR
         npcList <- npcsR
         enemyList <- enemiesR
+        talents <- talentsR
+        sprites <- spritesR
+        audio <- audioR
         qtext <- QuestText
           <$> langLookup table "ui.quest.started"
           <*> langLookup table "ui.quest.completed"
+          <*> langLookup table "ui.talent.gained"
         levels <- sequence levelChecks
         sequence_ sceneChecks
         crossValidate registry quests npcList enemyList levels
+        forM_ (audioLevelRefs audio) $ \lvl ->
+          unless (lvl `elem` map (T.pack . ldName) levels) $
+            Left ("audio.def: (music-for-level …) references unknown level "
+                  <> show lvl)
         Right GameDefs
           { gdLang = table
           , gdRegistry = registry
           , gdQuests = quests
           , gdNpcs = M.fromList [ (ndId nd, nd) | nd <- npcList ]
           , gdEnemies = M.fromList [ (edId ed, ed) | ed <- enemyList ]
+          , gdTalents = talents
+          , gdSprites = M.fromList [ (sdId sd, sd) | sd <- sprites ]
+          , gdAudio = audio
           , gdQuestText = qtext
           }
   where

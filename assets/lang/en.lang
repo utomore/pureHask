@@ -71,3 +71,24 @@ enemy.slime.name  = SLIME
 enemy.slime-red.name = RED SLIME
 enemy.archer.name = ABYSS ARCHER
 enemy.brute.name  = WARDEN
+
+;; ---- talents ----
+ui.talent.gained = TALENT POINT
+
+talent.blade-touch.name   = KEEN TOUCH
+talent.blade-touch.desc   = PER RANK: ATK +2
+talent.blade-edge.name    = RENDING EDGE
+talent.blade-edge.desc    = PER RANK: ATK +4 (NEEDS KEEN TOUCH 2)
+talent.bulwark-skin.name  = STONE SKIN
+talent.bulwark-skin.desc  = PER RANK: DEF +1
+talent.bulwark-heart.name = BULWARK HEART
+talent.bulwark-heart.desc = PER RANK: MAX HP +25 (NEEDS STONE SKIN 2)
+talent.gale-step.name     = GALE STEP
+talent.gale-step.desc     = PER RANK: MOVE SPEED +6%
+talent.gale-lungs.name    = GALE LUNGS
+talent.gale-lungs.desc    = PER RANK: MAX STAMINA +20 (NEEDS GALE STEP 1)
+
+npc.echo-shrine.name     = ECHO SHRINE
+npc.echo-shrine.chat.1   = (THE STONE HUMS SOFTLY...)
+npc.echo-shrine.respec.1 = THE ECHOES SCATTER. CHOOSE YOUR PATH ANEW.
+npc.echo-shrine.toast    = ALL TALENTS RESET

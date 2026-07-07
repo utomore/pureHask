@@ -129,10 +129,16 @@ newtype Equipped = Equipped (M.Map EquipSlot ItemId) deriving (Eq, Show)
 instance Component Equipped where
   type Storage Equipped = Map Equipped
 
--- | Cached total of base + equipment stats; recomputed on equip change.
+-- | Cached total of base + talent + equipment stats; recomputed whenever
+--   equipment or talents change.
 newtype StatsCache = StatsCache DerivedStats deriving (Eq, Show)
 instance Component StatsCache where
   type Storage StatsCache = Map StatsCache
+
+-- | The player's talent progression (see "Talent.Core").
+newtype Talents = Talents TalentState deriving (Eq, Show)
+instance Component Talents where
+  type Storage Talents = Map Talents
 
 -- | Marker for NPC entities (which definition they instantiate).
 newtype Npc = Npc NpcId deriving (Eq, Show)
@@ -188,6 +194,7 @@ makeWorld "World"
   , ''Vitals
   , ''Equipped
   , ''StatsCache
+  , ''Talents
   , ''Npc
   , ''NpcBrain
   , ''Enemy

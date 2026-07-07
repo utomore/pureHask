@@ -26,17 +26,19 @@ data QuestOut = QuestOut
   , qoToasts   :: ![Text]
   } deriving (Eq, Show)
 
--- | The engine-generated toast prefixes, resolved from the language table
---   at startup (keys @ui.quest.started@ / @ui.quest.completed@). The quest
---   machine stays pure — text is data fed in, never looked up here.
+-- | The engine-generated toast texts, resolved from the language table at
+--   startup (keys @ui.quest.started@ / @ui.quest.completed@ /
+--   @ui.talent.gained@). The machines stay pure — text is data fed in,
+--   never looked up here.
 data QuestText = QuestText
-  { qtStarted   :: !Text
-  , qtCompleted :: !Text
+  { qtStarted      :: !Text
+  , qtCompleted    :: !Text
+  , qtTalentGained :: !Text  -- ^ toast prefix when talent points are earned
   } deriving (Eq, Show)
 
 -- | Fallback wording, also what the unit tests run against.
 defaultQuestText :: QuestText
-defaultQuestText = QuestText "任務開始:" "任務完成:"
+defaultQuestText = QuestText "任務開始:" "任務完成:" "天賦點"
 
 -- | Fresh log: auto-start quests begin active.
 initialQuestLog :: [QuestDef] -> QuestLog
@@ -103,6 +105,8 @@ applyQuestAction qtext defs act out = case act of
   ATakeItem iid n -> out { qoCommands = qoCommands out <> [WcTakeItem iid n] }
   ASpawnNpc npc x y -> out { qoCommands = qoCommands out <> [WcSpawnNpc npc x y] }
   ADespawnNpc npc -> out { qoCommands = qoCommands out <> [WcDespawnNpc npc] }
+  AGiveTalentPoints n -> out { qoCommands = qoCommands out <> [WcGiveTalentPoints n] }
+  ARespecTalents -> out { qoCommands = qoCommands out <> [WcRespecTalents] }
   AToast msg      -> out { qoToasts = qoToasts out <> [msg] }
   -- Dialogue from quest scripts is shown as toast lines; NPC dialogue proper
   -- arrives with the NPC system.

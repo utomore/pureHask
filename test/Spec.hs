@@ -2,6 +2,7 @@ module Main where
 
 import Test.Hspec
 
+import qualified AudioSpec
 import qualified CodecSpec
 import qualified CombatCoreSpec
 import qualified EnemyCoreSpec
@@ -21,6 +22,8 @@ import qualified SceneSpec
 import qualified SemanticsSpec
 import qualified SettingsSpec
 import qualified SexpSpec
+import qualified SpriteSpec
+import qualified TalentSpec
 import qualified TilemapSpec
 
 main :: IO ()
@@ -40,6 +43,9 @@ main = hspec $ do
   describe "Sim.CombatCore"   CombatCoreSpec.spec
   describe "Sim.EnemyCore"    EnemyCoreSpec.spec
   describe "Sim.EquipCore"    EquipCoreSpec.spec
+  describe "Talent"           TalentSpec.spec
+  describe "Sprite"           SpriteSpec.spec
+  describe "Audio"            AudioSpec.spec
   describe "Sim.ParticleCore" ParticleSpec.spec
   describe "Save.Codec"       CodecSpec.spec
   describe "Quest"            QuestSpec.spec

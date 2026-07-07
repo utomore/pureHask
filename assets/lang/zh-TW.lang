@@ -73,3 +73,24 @@ enemy.slime.name  = 史萊姆
 enemy.slime-red.name = 赤紅史萊姆
 enemy.archer.name = 深淵射手
 enemy.brute.name  = 巨衛
+
+;; ---- 天賦 ----
+ui.talent.gained = 獲得天賦點
+
+talent.blade-touch.name   = 烈刃初觸
+talent.blade-touch.desc   = 每階:攻擊力 +2
+talent.blade-edge.name    = 裂刃
+talent.blade-edge.desc    = 每階:攻擊力 +4(需 烈刃初觸 2 階)
+talent.bulwark-skin.name  = 石膚
+talent.bulwark-skin.desc  = 每階:防禦 +1
+talent.bulwark-heart.name = 壁壘之心
+talent.bulwark-heart.desc = 每階:生命上限 +25(需 石膚 2 階)
+talent.gale-step.name     = 疾風步
+talent.gale-step.desc     = 每階:移動速度 +6%
+talent.gale-lungs.name    = 長風之肺
+talent.gale-lungs.desc    = 每階:耐力上限 +20(需 疾風步 1 階)
+
+npc.echo-shrine.name     = 回聲石碑
+npc.echo-shrine.chat.1   = (石碑正低聲嗡鳴……)
+npc.echo-shrine.respec.1 = 迴響散去。你走過的路化為星點,重新選擇吧。
+npc.echo-shrine.toast    = 天賦已全數重置

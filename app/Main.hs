@@ -14,7 +14,7 @@
 --   and prints the error. @--validate@ runs the same pipeline headless.
 module Main where
 
-import Control.Monad (unless, when, foldM, forM, forM_)
+import Control.Monad (unless, when, filterM, foldM, forM, forM_)
 import Data.IORef
 import Data.List (elemIndex, isSuffixOf, sort)
 import qualified Data.Map.Strict as M
@@ -25,14 +25,18 @@ import Apecs (runSystem, cfold)
 import SDL (($=))
 import qualified SDL
 import Linear (V2(..), V4(..))
-import System.Directory (doesDirectoryExist, getModificationTime, listDirectory)
+import System.Directory (doesDirectoryExist, doesFileExist, getModificationTime,
+                         listDirectory)
 import System.Environment (getArgs)
 import System.Exit (exitFailure, exitSuccess)
 import System.FilePath ((</>))
 import System.IO (hSetBuffering, stdout, BufferMode(LineBuffering))
 
+import Audio.Player (AudioState, initAudio, loadAudioState, destroyAudioState,
+                     shutdownAudio, playEventSfx, syncMusic)
+import Audio.Script (adSfx, adMusic)
 import Core.Components (World, initWorld, Player(..), Backpack(..), Equipped(..),
-                        Position(..), Collider(..))
+                        Position(..), Collider(..), Talents(..))
 import Core.Config
 import Core.Settings
 import Core.Types
@@ -45,6 +49,7 @@ import Render.Draw (renderScene)
 import Render.Font (FontSet(..), Fonts, loadFonts, freeFonts, drawText)
 import Render.Hud (renderHud)
 import Render.Menu (renderMenu)
+import Render.Sprites (SpriteTextures, loadSpriteTextures, destroySpriteTextures)
 import Render.UI (renderOverlay, renderBackpack)
 import Sim.Combat (controlPlayer)
 import Sim.Damage (resolveDamage)
@@ -55,8 +60,11 @@ import Sim.Particles (tickParticles)
 import Sim.Physics (stepPhysics, tickVFX, updateProjectiles)
 import Save.Codec
 import Sim.Rules (applyIntents, checkRules, drainEvents, useItemById, equipById,
-                  unequipBySlot, runWorldCommand)
+                  unequipBySlot, learnTalentById, refreshPlayerStats,
+                  runWorldCommand)
 import Sim.Spawn (spawnLevel, respawnPlayer, capturePlayer, applyPlayer)
+import Talent.Core (talentRows)
+import Talent.Script (TalentDef(..))
 import World.Level
 import World.Scene (SceneDef, loadSceneFile)
 import World.Tilemap (mapPixelHeight)
@@ -117,6 +125,11 @@ data ShellCtx = ShellCtx
     --   mtimes, last seen level/scene-file mtimes
   , scWindow      :: !SDL.Window
   , scRenderer    :: !SDL.Renderer
+  , scTexturesRef :: !(IORef SpriteTextures)
+    -- ^ sprite-sheet textures; rebuilt when a sprite definition or sheet
+    --   image changes on disk
+  , scAudioRef    :: !(IORef (Maybe AudioState))
+    -- ^ loaded sounds/tracks; 'Nothing' when no audio device is available
   , scFonts       :: !Fonts
     -- ^ TTF fonts loaded at startup; the pixel font needs no handle. The
     --   active choice is read from the settings each frame.
@@ -191,7 +204,11 @@ runValidate = do
                   <> show (length (allItems (gdRegistry defs))) <> " items, "
                   <> show (length (gdQuests defs)) <> " quests, "
                   <> show (M.size (gdNpcs defs)) <> " npcs, "
-                  <> show (M.size (gdEnemies defs)) <> " enemies")
+                  <> show (M.size (gdEnemies defs)) <> " enemies, "
+                  <> show (length (gdTalents defs)) <> " talents, "
+                  <> show (M.size (gdSprites defs)) <> " sprites, "
+                  <> show (M.size (adSfx (gdAudio defs))) <> " sfx, "
+                  <> show (M.size (adMusic (gdAudio defs))) <> " tracks")
         pure True
   if and results then exitSuccess else exitFailure
 
@@ -227,6 +244,22 @@ runGame = do
 
   applyDisplaySettings window settings
 
+  -- Sprite sheets were validated by loadDefs; a load failure here means a
+  -- genuinely broken image and aborts, like any other bad asset.
+  textures0 <- loadSpriteTextures renderer "assets/textures"
+                 (M.elems (gdSprites defs0))
+                 >>= either fail pure
+  texturesRef <- newIORef textures0
+
+  -- Audio: a machine without a device plays silent; a broken sound FILE at
+  -- startup aborts like any other bad asset (references were validated).
+  audioDevice <- initAudio
+  audio0 <- case audioDevice of
+    Nothing -> pure Nothing
+    Just () -> Just <$> (loadAudioState "assets/audio" (gdAudio defs0)
+                           >>= either fail pure)
+  audioRef <- newIORef audio0
+
   network <- buildNetwork defsRef (length levelFiles)
 
   -- Load the first level immediately so the title screen has a scene behind it.
@@ -245,13 +278,17 @@ runGame = do
         , scSaveEnv = SaveEnv levelNames
         , scLevelRef = levelRef, scQuitRef = quitRef, scSettingsRef = settingsRef
         , scSlotsRef = slotsRef, scFrameRef = frameRef, scWatchRef = watchRef
-        , scWindow = window, scRenderer = renderer, scFonts = fonts
+        , scWindow = window, scRenderer = renderer
+        , scTexturesRef = texturesRef, scAudioRef = audioRef, scFonts = fonts
         }
 
   refreshSlots ctx
   startTime <- SDL.ticks
   gameLoop ctx startTime emptyRawInput 0.0 [] 60.0
 
+  readIORef audioRef >>= mapM_ destroyAudioState
+  when (audioDevice /= Nothing) shutdownAudio
+  readIORef texturesRef >>= destroySpriteTextures
   freeFonts fonts
   SDL.destroyRenderer renderer
   SDL.destroyWindow window
@@ -279,8 +316,12 @@ applyDisplaySettings window s =
 --   deliberately absent: changing them mid-run means rebuilding worlds.
 watchedMtimes :: Language -> IO [(FilePath, UTCTime)]
 watchedMtimes lang = do
-  let dirs = ["assets/quests", "assets/npcs", "assets/enemies"]
+  let dirs = [ "assets/quests", "assets/npcs", "assets/enemies"
+             , "assets/sprites", "assets/textures"
+             , "assets/audio/sfx", "assets/audio/music" ]
       singles = [ "assets/items/items.def"
+                , "assets/talents/talents.def"
+                , "assets/audio/audio.def"
                 , "assets/lang" </> (langCode lang <> ".lang")
                 ]
   dirFiles <- fmap concat . forM dirs $ \dir -> do
@@ -288,7 +329,9 @@ watchedMtimes lang = do
     if exists
       then map (dir </>) <$> listDirectory dir
       else pure []
-  forM (singles <> dirFiles) $ \path -> do
+  -- The talent file is optional (see Talent.Script); only watch what exists.
+  present <- filterM doesFileExist (singles <> dirFiles)
+  forM present $ \path -> do
     t <- getModificationTime path
     pure (path, t)
 
@@ -323,6 +366,31 @@ checkHotReload ctx now = do
       case result of
         Right defs -> do
           writeIORef (scDefsRef ctx) defs
+          -- Talent or item stats may have changed under the player's feet.
+          LoadedLevel _ _ world <- readIORef (scLevelRef ctx)
+          runSystem (refreshPlayerStats (gdRegistry defs) (gdTalents defs)) world
+          -- Sprite sheets travel with the definitions: rebuild the texture
+          -- cache; a broken image keeps the old textures (and says so).
+          texResult <- loadSpriteTextures (scRenderer ctx) "assets/textures"
+                         (M.elems (gdSprites defs))
+          case texResult of
+            Right texs -> do
+              old <- readIORef (scTexturesRef ctx)
+              destroySpriteTextures old
+              writeIORef (scTexturesRef ctx) texs
+            Left err ->
+              putStrLn ("[hot-reload] " <> err <> " -- keeping the old textures")
+          -- Sounds too; the music halts and the next frame restarts the
+          -- right track from the reloaded table.
+          mOldAudio <- readIORef (scAudioRef ctx)
+          forM_ mOldAudio $ \oldAudio -> do
+            audioResult <- loadAudioState "assets/audio" (gdAudio defs)
+            case audioResult of
+              Right newAudio -> do
+                destroyAudioState oldAudio
+                writeIORef (scAudioRef ctx) (Just newAudio)
+              Left err ->
+                putStrLn ("[hot-reload] " <> err <> " -- keeping the old sounds")
           putStrLn "[hot-reload] definitions reloaded"
         Left err ->
           putStrLn ("[hot-reload] " <> err <> " -- keeping the old definitions")
@@ -402,7 +470,9 @@ runCommand ctx cmd = do
           -- written; every adjustment is reported, never silent.
           let knownQuests = [ (qdId qd, length (qdStages qd)) | qd <- gdQuests defs ]
               knownItems = map defId (allItems (gdRegistry defs))
-              (sv, warns) = sanitizeSave knownQuests knownItems sv0
+              knownTalents = [ (tdId td, tdMaxRank td, tdCost td)
+                             | td <- gdTalents defs ]
+              (sv, warns) = sanitizeSave knownQuests knownItems knownTalents sv0
           mapM_ putStrLn warns
           loaded@(LoadedLevel _ _ newWorld) <-
             loadLevelIx defs (scLevelFiles ctx) (svLevel sv)
@@ -421,10 +491,13 @@ runCommand ctx cmd = do
       runSystem (useItemById (gdRegistry defs) iid) world
     CmdEquip iid -> do
       LoadedLevel _ _ world <- readIORef (scLevelRef ctx)
-      runSystem (equipById (gdRegistry defs) iid) world
+      runSystem (equipById (gdRegistry defs) (gdTalents defs) iid) world
     CmdUnequip slot -> do
       LoadedLevel _ _ world <- readIORef (scLevelRef ctx)
-      runSystem (unequipBySlot (gdRegistry defs) slot) world
+      runSystem (unequipBySlot (gdRegistry defs) (gdTalents defs) slot) world
+    CmdLearnTalent tid -> do
+      LoadedLevel _ _ world <- readIORef (scLevelRef ctx)
+      runSystem (learnTalentById (gdRegistry defs) (gdTalents defs) tid) world
     CmdToggleSetting ix -> do
       s <- readIORef (scSettingsRef ctx)
       let s' = toggleSetting ix s
@@ -439,6 +512,7 @@ buildMenuEnv ctx defs = do
   LoadedLevel _ _ world <- readIORef (scLevelRef ctx)
   backpacks <- runSystem (cfold (\acc (Player, Backpack b) -> b : acc) []) world
   equippedL <- runSystem (cfold (\acc (Player, Equipped e) -> e : acc) []) world
+  talentsL <- runSystem (cfold (\acc (Player, Talents t) -> t : acc) []) world
   settings <- readIORef (scSettingsRef ctx)
   (auto, manual) <- readIORef (scSlotsRef ctx)
   let rows = case backpacks of
@@ -447,9 +521,14 @@ buildMenuEnv ctx defs = do
       equipped = case equippedL of
         (e : _) -> e
         []      -> mempty
+      talents = case talentsL of
+        (t : _) -> t
+        []      -> emptyTalentState
   pure MenuEnv
     { meBackpack  = rows
     , meEquipped  = [ (slot, M.lookup slot equipped) | slot <- [minBound .. maxBound] ]
+    , meTalents   = talentRows (gdTalents defs) talents
+    , meTalentPts = tsPoints talents
     , meSaveSlots = manual
     , meAutoSave  = auto
     , meSettings  = settingsRows settings
@@ -530,9 +609,13 @@ gameLoop ctx lastTime rawInput acc pending fps = do
       --    flow and quest machines decided.
       evs <- runSystem drainEvents world
       unless (null evs) $ do
+        -- Event-driven audio: the sim published facts, play their sounds.
+        mAudio <- readIORef (scAudioRef ctx)
+        forM_ mAudio $ \au -> mapM_ (playEventSfx au (gdAudio defs)) evs
         out <- netEvents (scNetwork ctx) evs
         runSystem
-          (mapM_ (\wc -> runWorldCommand wc >> runNpcCommand (gdNpcs defs) wc)
+          (mapM_ (\wc -> runWorldCommand (gdRegistry defs) (gdTalents defs) wc
+                           >> runNpcCommand (gdNpcs defs) wc)
                  (eoWorldCmds out))
           world
         mapM_ (runCommand ctx) (eoCommands out)
@@ -547,9 +630,15 @@ gameLoop ctx lastTime rawInput acc pending fps = do
   settings <- readIORef (scSettingsRef ctx)
   let fonts = FontSet renderer (setFont settings) (scFonts ctx)
   LoadedLevel lvl scene world <- readIORef (scLevelRef ctx)
+  textures <- readIORef (scTexturesRef ctx)
+  -- Music follows the mode/level the flow machine decided on.
+  mAudio <- readIORef (scAudioRef ctx)
+  forM_ mAudio $ \au ->
+    syncMusic au (gdAudio defs) (foMode frame) (T.pack (ldName lvl))
+  let animClock = fromIntegral currentTime / 1000.0
   runSystem
     (renderScene fonts (gdRegistry defs) (gdNpcs defs) (gdEnemies defs)
-       (ldTilemap lvl) scene)
+       (gdSprites defs) textures animClock (ldTilemap lvl) scene)
     world
   when (foMode frame == ModePlaying) $ do
     let tracker = activeGoal (gdQuests defs) (foQuests frame)
@@ -557,7 +646,7 @@ gameLoop ctx lastTime rawInput acc pending fps = do
     runSystem (renderBackpack fonts (gdRegistry defs)) world
   when (foMode frame == ModeMenu) $
     runSystem
-      (renderMenu fonts (gdRegistry defs) (ldTilemap lvl)
+      (renderMenu fonts (gdRegistry defs) (gdTalents defs) (ldTilemap lvl)
          (foMenu frame) menuEnv (foStats frame) (foLevel frame)
          (gdQuests defs) (foQuests frame))
       world

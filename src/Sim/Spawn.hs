@@ -17,6 +17,7 @@ import Linear (V2(..))
 import Core.Components
 import Core.Config
 import Core.Types
+import Sim.EquipCore (applyMaxima)
 import World.Level
 
 -- | Populate a FRESH world from level data. "Main" creates a brand-new world
@@ -44,6 +45,7 @@ spawnLevel lvl = do
           )
   set ety ( Equipped M.empty
           , StatsCache baseStats
+          , Talents emptyTalentState
           )
 
   _ <- newEntity ( Goal
@@ -59,11 +61,13 @@ spawnLevel lvl = do
     return ()
 
 -- | Put the player back at the spawn point with a clean slate (items are kept;
---   dying does not reset collection progress). Vitals refill — respawning
---   with 0 hp would be an instant death loop.
+--   dying does not reset collection progress). Vitals refill to the cached
+--   maxima (talents may raise them) — respawning with 0 hp would be an
+--   instant death loop.
 respawnPlayer :: V2 Double -> Game ()
 respawnPlayer spawnPos =
   cmapM_ $ \(Player, ety) -> do
+    StatsCache stats <- get ety
     set ety ( Position spawnPos
             , Velocity (V2 0.0 0.0)
             , IsGrounded False
@@ -71,7 +75,7 @@ respawnPlayer spawnPos =
             )
     set ety ( PlayerHook HookRetracted
             , DoubleJump False
-            , fullVitals playerMaxHp playerMaxMp playerMaxStamina
+            , applyMaxima stats (fullVitals playerMaxHp playerMaxMp playerMaxStamina)
             , Invuln 0.0
             )
 
@@ -86,6 +90,7 @@ data PlayerPersist = PlayerPersist
   , ppEquipped :: !(M.Map EquipSlot ItemId)
   , ppVitals   :: !Vitals
   , ppStats    :: !DerivedStats
+  , ppTalents  :: !TalentState
   } deriving (Eq, Show)
 
 -- | Read the persistent player state out of the current world.
@@ -96,7 +101,8 @@ capturePlayer = do
         Equipped eq <- get ety
         vitals :: Vitals <- get ety
         StatsCache stats <- get ety
-        return (PlayerPersist bp eq vitals stats : acc))
+        Talents talents <- get ety
+        return (PlayerPersist bp eq vitals stats talents : acc))
     []
   return $ case results of
     (p : _) -> Just p
@@ -105,9 +111,10 @@ capturePlayer = do
 -- | Write a persistent player state into a freshly spawned world.
 applyPlayer :: PlayerPersist -> Game ()
 applyPlayer pp =
-  cmapM_ $ \(Player, ety) ->
+  cmapM_ $ \(Player, ety) -> do
     set ety ( Backpack (ppBackpack pp)
             , Equipped (ppEquipped pp)
             , ppVitals pp
             , StatsCache (ppStats pp)
             )
+    set ety (Talents (ppTalents pp))

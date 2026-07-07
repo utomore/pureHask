@@ -92,15 +92,19 @@
   Sim.CombatCore   -- 戰鬥機(含耐力把關、衝刺跳躍)
   Sim.EnemyCore    -- 敵人行為樹求值器(反應式)+ 玩家攻擊 hitbox 表
   Sim.ParticleCore -- 粒子:純積分步進 + 決定性發射器
-  Sim.EquipCore    -- 穿脫規則 + DerivedStats 計算
+  Sim.EquipCore    -- 穿脫規則 + DerivedStats 計算(天賦為底、裝備疊加)
   Sim.Items        -- 用藥效果、背包純操作
   Enemy.Script     -- 敵人 DSL schema(assets/enemies/*.enemy)
+  Talent.Script / Talent.Core  -- 天賦 DSL schema + 純規則(購買/重洗/加成/擊殺里程碑)
+  Sprite.Script / Sprite.Core  -- sprite sheet DSL schema(含純 BMP 表頭驗證)+ 動畫選幀
+  Audio.Script     -- 音訊 DSL schema + 純選音規則(事件→音效、模式/關卡→音樂)
   Script.Expr      -- DSL 條件/動作 AST + 求值器(任務/NPC 共用詞彙)
   Script.Inherit   -- (inherit BASE) 表單層展開(道具/敵人共用)
   Quest.Script / Quest.Runtime -- 任務 schema + 任務機(QuestLog)
   Npc.Script / Npc.Core        -- NPC schema + 巡邏 AI 機 + 對話規則求值
   Hud.Machine      -- toast 佇列機
   Game.Logic       -- ★ 上述 流程/任務/HUD 機的「組合器」,被 FRP 摺疊
+                      (也在此把擊殺里程碑/過關折算成天賦點指令)
   Save.Codec       -- SaveGame ↔ JSON(roundtrip 不變量)
   Core.Settings    -- 設定檔純解析
   World.Tilemap / World.Level / World.Scene -- 地形、關卡檔、視差佈景檔
@@ -114,6 +118,8 @@
   Render.Font / Widgets / Layers / Draw / Hud / Menu / UI    -- 繪製
                    (Font 有雙後端:內建 3x5 像素字型 + SDL2_ttf 繁中 TTF,
                     由設定選單的 FONT 列切換;所有繪字走每幀的 FontSet)
+  Render.Sprites   -- sprite sheet 貼圖快取 + 選幀 blit(SDL.loadBMP,無新原生依賴)
+  Audio.Player     -- 唯一碰 SDL_mixer 的模組(載入 chunk/track、播事件音、對齊音樂)
 
 第 3 層(殼):
   app/Main.hs      -- SDL 初始化、主迴圈、Flow/WorldCommand 執行、
@@ -124,6 +130,9 @@
 `assets/levels/*.txt`(關卡)、`assets/items/items.def`(道具)、
 `assets/quests/*.quest`(任務)、`assets/npcs/*.npc`(NPC)、
 `assets/enemies/*.enemy`(敵人)、`assets/scenes/*.scene`(視差佈景)、
+`assets/talents/talents.def`(天賦樹)、
+`assets/sprites/*.sprite` + `assets/textures/*.bmp`(sprite sheet 動畫)、
+`assets/audio/audio.def` + `assets/audio/{sfx,music}/*.wav`(音效/音樂)、
 `assets/fonts/*.ttf`(TTF 字體,啟動期載入)、
 `config/settings.cfg`(設定)、`saves/*.json`(存檔,gitignore)。
 **全部在啟動期交叉驗證,dangling reference = 啟動失敗。**
@@ -208,9 +217,22 @@
 3. 危險磁磚的判定寫在 `Sim.Rules`(發 `EvPlayerDied` 或未來的傷害事件),不要寫在物理裡。
 4. `Render.Draw` 上色;`TilemapSpec` 加測試。
 
-### 3.8 新增音效/音樂(規劃好的路徑)
+### 3.8 新增音效/音樂 ★零程式碼(音訊系統已建成)
 
-事件驅動:訂閱的正確位置是 `Main` 中 `netEvents`/`netFrame` 回傳處——`GameEvent` 與 `GameMode` 轉換就是播放時機(死亡音、撿取音、換 BGM)。新增 `Audio.hs` 封裝 sdl2-mixer,由 `Main` 呼叫。**不要在模擬或 Reflex 裡播音效。**
+事件驅動,**模擬與 Reflex 永遠不知道音訊存在**:模擬發 `GameEvent`,
+殼層對照 `assets/audio/audio.def` 的綁定表播音;音樂由 `GameMode`+關卡名
+決定,沒綁定的模式(選單/對話)維持現曲不重播。
+
+1. 把 `.wav` 放進 `assets/audio/sfx/` 或 `music/`,在 `audio.def` 宣告
+   `(sfx …)`/`(music …)` 並用 `(on-event 事件 音效)`、`(music-for-mode 模式 曲)`、
+   `(music-for-level 關卡 曲)` 綁定(合法事件/模式名見 DSL_GUIDE.md §11)。
+2. 完成。啟動期驗證檔案存在與綁定名;熱重載生效。
+
+系統本體:`Audio.Script`(純 schema + `sfxForEvent`/`musicFor` 選音規則,
+`AudioSpec` 覆蓋)、`Audio.Player`(唯一碰 SDL_mixer 的膠水,`Main` 每幀呼叫
+`playEventSfx` 與 `syncMusic`)。新增可綁的事件 = `Audio.Script.eventKey`
+加一行 + 測試。無音訊裝置的機器自動靜音運行。
+原生庫:msys2 `mingw-w64-x86_64-SDL2_mixer`。
 
 ### 3.9 改動存檔格式(migration 已建成)
 
@@ -242,6 +264,45 @@
 `settingsRows`/`toggleSetting`/parse/format → 需要副作用就在
 `Main.runCommand` 的 `CmdToggleSetting` 後套用(比照 `applyDisplaySettings`)。
 
+### 3.11 新增/調整天賦 ★零程式碼(天賦系統已建成)
+
+1. 在 `assets/talents/talents.def` 加一個 `(talent …)` 表單:name/desc(lang key)/
+   max-rank/cost/requires/effect。效果詞彙(sum type,編譯器把關):
+   `(atk N) (def N) (spd N) (max-hp N) (max-stamina N)`,每階疊加。
+   `(requires 節點 [階])` 只能引用檔案中**較早**定義的節點——無環由構造保證。
+2. 顯示文字 key 加進兩份 `assets/lang/*.lang`。完成,熱重載生效。
+
+規則與資料流(改行為才需要碰):
+- 純規則在 `Talent.Core`(購買/重洗/`talentBonus` 加成、`killPointsBetween`
+  里程碑;`TalentSpec` 覆蓋)。天賦是 `DerivedStats` 的**底層**,裝備疊在其上
+  (`Sim.EquipCore.computeStats` 吃 base 參數);max-hp/max-stamina 加成經
+  `applyMaxima` 同步進 `Vitals`。
+- 點數獲得:擊殺里程碑(每 `Core.Config.talentKillsPerPoint` 殺 +1,
+  `Flow.Machine` 折 `statKills`、`Game.Logic` 折算成 `WcGiveTalentPoints`)、
+  過關 +`talentPointsPerClear`、腳本動作 `(give-talent-points N)`(任務獎勵)。
+- 重洗:腳本動作 `(respec-talents)`——放在指定 NPC 的對話裡就是「到指定地點
+  重新配點」(現成範例:`assets/npcs/echo-shrine.npc`,關卡 03 的回聲石碑)。
+- 選單 TALENT 頁購買 → `CmdLearnTalent` → `Sim.Rules.learnTalentById`
+  (純規則二次把關)。天賦狀態存在玩家實體(`Talents` 元件),隨
+  `PlayerPersist` 跨關與存檔(v3;未知的天賦 id 由 `sanitizeSave` 明確退點)。
+
+### 3.12 幫實體加 sprite sheet 動畫 ★零程式碼(動畫系統已建成)
+
+1. 美術放 `assets/textures/*.bmp`(BMP;可用 `(color-key R G B)` 去背,
+   慣用洋紅 255 0 255。PNG 請先轉檔——SDL 內建只吃 BMP,免加原生依賴)。
+2. 在 `assets/sprites/` 放 `.sprite` 檔:`(sheet …)`、`(frame-size W H)`、
+   若干 `(anim 名 (row R) (frames N) (fps F))`(格式見 DSL_GUIDE.md §12)。
+3. **命名慣例決定誰用它**:`player` 給玩家、`npc-ID` 給 NPC、`enemy-ID`
+   給敵人。沒有 sheet 的實體維持色塊——美術可以一張一張慢慢換。
+4. 完成。啟動期以純 BMP 表頭驗證(`--validate` 免視窗也查格數是否超界);
+   熱重載(.sprite 與 .bmp 都監看,貼圖快取自動重建)。
+
+系統本體:`Sprite.Script`(schema + BMP 驗證)、`Sprite.Core`(純選幀:
+`frameIndex`/`animOrFallback`/`playerAnimPrefs`,`SpriteSpec` 覆蓋)、
+`Render.Sprites`(貼圖快取 + blit)。動畫名有 fallback 鏈(缺 `dash` 自動退
+`run` 再退 `idle`),sheet 最少一列 `idle` 就能動;動畫時鐘是渲染側的
+牆鐘——動畫是表現層,不吃固定時步。
+
 ---
 
 ## 4. 設計理念(為什麼是這樣)
@@ -257,7 +318,12 @@
 
 ## 5. 已知的保留與待辦
 
-- 尚無:檢查點、音效、手把。皆有規劃路徑(見第 3 節與 GAME_DESIGN_REPORT.md 的里程碑 M2–M5)。
+- 尚無:檢查點、手把。皆有規劃路徑(見第 3 節與 GAME_DESIGN_REPORT.md 的里程碑 M2–M5)。
+- 音效/音樂(3.8)、天賦(3.11)、sprite sheet 動畫(3.12)已建成。
+- 貼圖目前只吃 BMP(SDL 內建);要原生 PNG 得引入 SDL2_image——hackage 的
+  sdl2-image 2.1.0.0 在 GHC 9.14 因 SDL_main 宣告衝突編不過,屆時再評估
+  (修 bindings 或改用 JuicyPixels 解碼 + Raw surface)。
+- 音量總開關尚未做成設定列;個別音量在 audio.def 調。
 - 敵人/HP/傷害已建成(3.4);`Projectile` 現由遠程敵人生成。
 - **RPG 化七大系統**(主選單、任務 DSL、存讀檔、背包/裝備、七層視差、NPC DSL、HUD)的完整設計見 [SYSTEMS_DESIGN.md](SYSTEMS_DESIGN.md);其建造順序 S1–S9 與本文件的擴充指南互補,實作時兩者皆須遵守。注意其中一項原則演進:內容層道具將由 `ItemType` sum type 遷移為啟動期驗證的 `ItemId` registry(SYSTEMS_DESIGN.md §2.1 有完整論證)。
 - `cabal.project` 用 `allow-newer` 放寬 reflex 生態對 base-4.22/template-haskell-2.24 的上限(GHC 9.14);若升級 reflex 後可移除。

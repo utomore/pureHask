@@ -11,6 +11,8 @@ module Sim.Rules
   , useItemById
   , equipById
   , unequipBySlot
+  , learnTalentById
+  , refreshPlayerStats
   , runWorldCommand
   , checkRules
   , aabbOverlap
@@ -25,10 +27,12 @@ import Core.Components
 import Core.Config (tileSize)
 import Core.Types
 import Items.Registry (ItemRegistry, defId, defUse, defCategory, lookupItem)
-import Sim.EquipCore (equipItem, unequipSlot, computeStats)
+import Sim.EquipCore (equipItem, unequipSlot, computeStats, applyMaxima)
 import Sim.Items (applyEffects, firstPotion, consumeOne)
 import Sim.ParticleCore (pickupBurst)
 import Sim.Particles (emitParticles)
+import Talent.Core (learnTalent, respecTalents, talentBonus)
+import Talent.Script (TalentDef)
 
 -- | Append a simulation fact to the global outbox.
 emitEvent :: GameEvent -> Game ()
@@ -100,38 +104,57 @@ useItemById registry iid =
             emitEvent (EvItemUsed (defId def))
       _ -> return ()
 
+-- | Recompute the player's cached stats (talents as the base, gear on top)
+--   and bring the vitals' maxima in line. Runs after every equip/talent
+--   change and after a definitions hot reload.
+refreshPlayerStats :: ItemRegistry -> [TalentDef] -> Game ()
+refreshPlayerStats registry talents =
+  cmapM_ $ \(Player, Equipped equipped, playerEty) -> do
+    Talents ts <- get playerEty
+    vitals :: Vitals <- get playerEty
+    let stats = computeStats registry (talentBonus talents ts) equipped
+    set playerEty (StatsCache stats, applyMaxima stats vitals)
+
 -- | Equip a gear item from the backpack (menu confirm). No-op for unknown or
 --   non-equipment ids. Refreshes the derived-stats cache.
-equipById :: ItemRegistry -> ItemId -> Game ()
-equipById registry iid =
+equipById :: ItemRegistry -> [TalentDef] -> ItemId -> Game ()
+equipById registry talents iid =
   cmapM_ $ \(Player, Backpack items, playerEty) -> do
     Equipped equipped <- get playerEty
     case lookupItem registry iid >>= \def -> equipItem def equipped items of
       Nothing -> return ()
       Just (equipped', items') -> do
-        set playerEty ( Equipped equipped'
-                      , Backpack items'
-                      , StatsCache (computeStats registry equipped')
-                      )
+        set playerEty (Equipped equipped', Backpack items')
+        refreshPlayerStats registry talents
         emitEvent EvEquipChanged
 
 -- | Take the gear in a slot off, back into the backpack (menu confirm).
-unequipBySlot :: ItemRegistry -> EquipSlot -> Game ()
-unequipBySlot registry slot =
+unequipBySlot :: ItemRegistry -> [TalentDef] -> EquipSlot -> Game ()
+unequipBySlot registry talents slot =
   cmapM_ $ \(Player, Backpack items, playerEty) -> do
     Equipped equipped <- get playerEty
     let (equipped', items') = unequipSlot slot equipped items
     when (equipped' /= equipped) $ do
-      set playerEty ( Equipped equipped'
-                    , Backpack items'
-                    , StatsCache (computeStats registry equipped')
-                    )
+      set playerEty (Equipped equipped', Backpack items')
+      refreshPlayerStats registry talents
       emitEvent EvEquipChanged
+
+-- | Buy one rank of a talent (menu confirm). The pure rules in "Talent.Core"
+--   re-check points and prerequisites; an illegal request is a no-op.
+learnTalentById :: ItemRegistry -> [TalentDef] -> TalentId -> Game ()
+learnTalentById registry talents tid =
+  cmapM_ $ \(Player, Talents ts, playerEty) ->
+    case learnTalent talents tid ts of
+      Nothing  -> return ()
+      Just ts' -> do
+        set playerEty (Talents ts')
+        refreshPlayerStats registry talents
+        emitEvent (EvTalentLearned tid)
 
 -- | Execute a script-layer instruction against the world. NPC spawning is
 --   handled by the NPC system (its commands are dispatched in "Main").
-runWorldCommand :: WorldCommand -> Game ()
-runWorldCommand wc = case wc of
+runWorldCommand :: ItemRegistry -> [TalentDef] -> WorldCommand -> Game ()
+runWorldCommand registry talents wc = case wc of
   WcGiveItem iid n ->
     cmapM_ $ \(Player, Backpack items, playerEty) ->
       set playerEty (Backpack (M.insertWith (+) iid n items))
@@ -141,6 +164,14 @@ runWorldCommand wc = case wc of
         (\have -> if have <= n then Nothing else Just (have - n)) iid items))
   WcSpawnNpc {}  -> return ()  -- NPC system (S8)
   WcDespawnNpc _ -> return ()  -- NPC system (S8)
+  WcGiveTalentPoints n ->
+    cmapM_ $ \(Player, Talents ts, playerEty) ->
+      set playerEty (Talents ts { tsPoints = tsPoints ts + n })
+  WcRespecTalents ->
+    cmapM_ $ \(Player, Talents ts, playerEty) -> do
+      set playerEty (Talents (respecTalents talents ts))
+      refreshPlayerStats registry talents
+      emitEvent EvTalentsRespec
 
 -- | Emit death / goal events. The flow machine reacts to them on the next
 --   network firing; the simulation itself keeps running unchanged.

@@ -1,0 +1,16 @@
+;; 回聲石碑:重洗天賦的「指定地點」(關卡 03 幽谷)。
+;; 對它按 E 說話 = (respec-talents) 全額退還已花費的天賦點,
+;; 之後在選單 TALENT 頁重新配點。
+
+(npc echo-shrine
+  (name npc.echo-shrine.name)
+  (color 120 200 255)
+  (size 28 40)
+  (spawn-at 03-hollow 30 13)
+  (movement (idle))
+  (chatter 15 npc.echo-shrine.chat.1)
+  (dialogue
+    (default
+      (say echo-shrine npc.echo-shrine.respec.1)
+      (respec-talents)
+      (toast npc.echo-shrine.toast))))

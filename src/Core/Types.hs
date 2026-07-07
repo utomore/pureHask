@@ -11,6 +11,7 @@ module Core.Types
   , QuestId(..)
   , NpcId(..)
   , EnemyId(..)
+  , TalentId(..)
   , EquipSlot(..)
   , ItemCategory(..)
     -- * Raw input (SDL-agnostic key snapshot)
@@ -30,6 +31,9 @@ module Core.Types
   , fullVitals
   , DerivedStats(..)
   , baseStats
+    -- * Talents
+  , TalentState(..)
+  , emptyTalentState
     -- * Quests
   , QuestPhase(..)
   , QuestProgress(..)
@@ -83,6 +87,9 @@ newtype NpcId = NpcId Text deriving (Eq, Ord, Show)
 
 -- | Identifier of an enemy kind defined in @assets/enemies/*.enemy@.
 newtype EnemyId = EnemyId Text deriving (Eq, Ord, Show)
+
+-- | Identifier of a talent node defined in @assets/talents/talents.def@.
+newtype TalentId = TalentId Text deriving (Eq, Ord, Show)
 
 -- | The five equipment slots. Fixed at the code level: equipment BEHAVIOUR
 --   is logic, so the compiler owns it.
@@ -215,18 +222,36 @@ data Vitals = Vitals
 fullVitals :: Double -> Double -> Double -> Vitals
 fullVitals hp mp st = Vitals hp hp mp mp st st
 
--- | Combat-relevant totals derived from base stats plus equipment. Computed
---   by "Sim.EquipCore" whenever equipment changes and cached on the player;
---   the combat machine reads these and never knows equipment exists.
+-- | Combat-relevant totals derived from base stats plus equipment and
+--   talents. Computed by "Sim.EquipCore" whenever equipment or talents
+--   change and cached on the player; the combat machine reads these and
+--   never knows equipment exists.
 data DerivedStats = DerivedStats
-  { dsAtk       :: !Int
-  , dsDef       :: !Int
-  , dsSpeedMult :: !Double  -- ^ movement speed multiplier (1.0 = base)
+  { dsAtk        :: !Int
+  , dsDef        :: !Int
+  , dsSpeedMult  :: !Double  -- ^ movement speed multiplier (1.0 = base)
+  , dsMaxHp      :: !Int     -- ^ bonus max HP on top of the configured base
+  , dsMaxStamina :: !Int     -- ^ bonus max stamina on top of the base
   } deriving (Eq, Show)
 
--- | Unequipped baseline.
+-- | Unequipped, untalented baseline.
 baseStats :: DerivedStats
-baseStats = DerivedStats 0 0 1.0
+baseStats = DerivedStats 0 0 1.0 0 0
+
+--------------------------------------------------------------------------------
+-- Talents
+--------------------------------------------------------------------------------
+
+-- | The player's talent progression: unspent points plus the rank learned in
+--   each node. Learn/respec rules live in "Talent.Core" (pure); the state is
+--   carried on the player entity and in save files.
+data TalentState = TalentState
+  { tsPoints :: !Int                   -- ^ unspent talent points
+  , tsRanks  :: !(Map TalentId Int)    -- ^ learned ranks (absent = 0)
+  } deriving (Eq, Show)
+
+emptyTalentState :: TalentState
+emptyTalentState = TalentState 0 Map.empty
 
 --------------------------------------------------------------------------------
 -- Quests
@@ -268,6 +293,8 @@ data GameEvent
   | EvEquipChanged
   | EvTalkedTo !NpcId                        -- ^ player interacted with an NPC
   | EvEnemyKilled !EnemyId                   -- ^ an enemy dropped to 0 hp
+  | EvTalentLearned !TalentId                -- ^ a talent rank was bought
+  | EvTalentsRespec                          -- ^ all talent points refunded
   | EvRunRestored !Int !RunStats !QuestLog   -- ^ a save was loaded
   deriving (Eq, Show)
 
@@ -288,11 +315,12 @@ data GameMode
 data RunStats = RunStats
   { statDeaths  :: !Int
   , statItems   :: !Int
+  , statKills   :: !Int    -- ^ enemies defeated (drives talent-point milestones)
   , statTime    :: !Double -- ^ seconds spent in 'ModePlaying'
   } deriving (Eq, Show)
 
 emptyRunStats :: RunStats
-emptyRunStats = RunStats 0 0 0
+emptyRunStats = RunStats 0 0 0 0
 
 -- | Instructions from the flow layer back to the effectful shell. The flow
 --   machine decides WHEN these happen; "Main" executes WHAT they do.
@@ -303,6 +331,7 @@ data FlowCommand
   | CmdUseItem !ItemId     -- ^ consume a potion picked in the menu
   | CmdEquip !ItemId       -- ^ equip a gear item picked in the menu
   | CmdUnequip !EquipSlot  -- ^ take off the gear in a slot
+  | CmdLearnTalent !TalentId -- ^ buy one rank of a talent (menu confirm)
   | CmdSaveGame !Int       -- ^ write save slot (0 = autosave)
   | CmdLoadGame !Int       -- ^ read save slot (0 = autosave)
   | CmdToggleSetting !Int  -- ^ toggle the Nth settings row
@@ -317,6 +346,8 @@ data WorldCommand
   | WcTakeItem !ItemId !Int
   | WcSpawnNpc !NpcId !Double !Double  -- ^ tile coordinates
   | WcDespawnNpc !NpcId
+  | WcGiveTalentPoints !Int            -- ^ grant unspent talent points
+  | WcRespecTalents                    -- ^ refund every learned talent rank
   deriving (Eq, Show)
 
 --------------------------------------------------------------------------------
@@ -328,6 +359,7 @@ data MenuPage
   = PageStatus
   | PageBackpack
   | PageEquip
+  | PageTalents
   | PageQuests
   | PageMap
   | PageSave
@@ -343,6 +375,7 @@ menuPageTitle p = case p of
   PageStatus   -> "STATUS"
   PageBackpack -> "BAG"
   PageEquip    -> "EQUIP"
+  PageTalents  -> "TALENT"
   PageQuests   -> "QUESTS"
   PageMap      -> "MAP"
   PageSave     -> "SAVE"
@@ -364,13 +397,16 @@ initialCursor = MenuCursor PageStatus 0
 data MenuEnv = MenuEnv
   { meBackpack  :: ![(ItemId, ItemCategory, Int)] -- ^ sorted rows (id, cat, count)
   , meEquipped  :: ![(EquipSlot, Maybe ItemId)]   -- ^ the five slots
+  , meTalents   :: ![(TalentId, Int, Bool)]       -- ^ rows in definition order:
+                                                  --   (id, rank, buyable now)
+  , meTalentPts :: !Int                           -- ^ unspent talent points
   , meSaveSlots :: ![Maybe String]                -- ^ manual slot summaries
   , meAutoSave  :: !(Maybe String)                -- ^ autosave summary
   , meSettings  :: ![(String, String)]            -- ^ settings rows (label, value)
   } deriving (Eq, Show)
 
 emptyMenuEnv :: MenuEnv
-emptyMenuEnv = MenuEnv [] [] [] Nothing []
+emptyMenuEnv = MenuEnv [] [] [] 0 [] Nothing []
 
 -- | A pure per-frame snapshot of the world facts the script layer may read
 --   (dialogue conditions such as @(has-item …)@ or @(player-near …)@).
