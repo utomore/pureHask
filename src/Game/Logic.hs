@@ -53,10 +53,11 @@ scriptEnvOf ls = ScriptEnv
   , envLevelName  = wsLevelName (lsWorld ls)
   }
 
--- | One stimulus through all machines.
-stepLogic :: [QuestDef] -> M.Map NpcId NpcDef -> FlowIn -> LogicState
+-- | One stimulus through all machines. 'QuestText' carries the language
+--   table's engine strings (toast prefixes) so the machines stay pure.
+stepLogic :: QuestText -> [QuestDef] -> M.Map NpcId NpcDef -> FlowIn -> LogicState
           -> (LogicState, LogicOut)
-stepLogic questDefs npcDefs flowIn ls = case flowIn of
+stepLogic qtext questDefs npcDefs flowIn ls = case flowIn of
   FlowFrame dt _ _ world ->
     let (flow', cmds) = stepFlow flowIn (lsFlow ls)
         hud' = tickHud dt (lsHud ls)
@@ -69,7 +70,7 @@ stepLogic questDefs npcDefs flowIn ls = case flowIn of
 
   FlowEvents evs ->
     let (flow', cmds) = stepFlow flowIn (lsFlow ls)
-        QuestOut qlog wcmds toasts = stepQuests questDefs evs (lsQuests ls)
+        QuestOut qlog wcmds toasts = stepQuests qtext questDefs evs (lsQuests ls)
 
         -- NPC conversations: evaluate the dialogue script of every talked-to
         -- NPC against the current snapshot.
@@ -89,7 +90,7 @@ stepLogic questDefs npcDefs flowIn ls = case flowIn of
           named = [ (resolveSpeaker s, l) | (s, l) <- says ]
           others = [ a | a <- acts, notSay a ]
           QuestOut qlog' wcmds' toasts' =
-            foldl (flip (applyQuestAction questDefs))
+            foldl (flip (applyQuestAction qtext questDefs))
                   (QuestOut qlog [] []) others
       in ( lns <> named
          , qlog'

@@ -37,7 +37,9 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Text.Encoding (decodeUtf8')
 
+import Core.Lang (LangTable, langText)
 import Core.Types (ItemId(..), ItemCategory(..), EquipSlot(..))
+import Script.Inherit (resolveInherits)
 import Script.Sexp
 
 -- | Flat additive stat block carried by equipment.
@@ -95,25 +97,30 @@ itemDisplayName reg iid@(ItemId raw) =
 --------------------------------------------------------------------------------
 
 -- | Compile parsed forms into a registry. Duplicate ids, unknown categories
---   or malformed fields are hard errors.
-compileRegistry :: [Sexp] -> Either String ItemRegistry
-compileRegistry forms = do
-  defs <- mapM compileItem (formsNamed "item" forms)
+--   or malformed fields are hard errors. Name/description accept string
+--   literals or 'Core.Lang' text keys; @(inherit BASE)@ copies an earlier
+--   item's fields (stats merge per-stat).
+compileRegistry :: LangTable -> [Sexp] -> Either String ItemRegistry
+compileRegistry table forms = do
+  bodies <- resolveInherits "item" ["stats"] [] [] (formsNamed "item" forms)
+  defs <- mapM (compileItem table) bodies
   let dups = M.keys (M.filter (> (1 :: Int)) (M.fromListWith (+) [ (defId d, 1) | d <- defs ]))
   case dups of
     (ItemId d : _) -> Left ("items.def: duplicate item id '" <> T.unpack d <> "'")
     [] -> Right (ItemRegistry (M.fromList [ (defId d, d) | d <- defs ]))
 
-compileItem :: [Sexp] -> Either String ItemDef
-compileItem [] = Left "items.def: (item …) without an id"
-compileItem (idForm : body) = do
+compileItem :: LangTable -> [Sexp] -> Either String ItemDef
+compileItem _ [] = Left "items.def: (item …) without an id"
+compileItem table (idForm : body) = do
   rawId <- maybe (Left "items.def: item id must be a symbol") Right (sexpSymbol idForm)
   let ctx = "item '" <> T.unpack rawId <> "'"
       field name = fieldOf name body
+      textField what = case field what >>= safeHead of
+        Nothing   -> Right Nothing
+        Just form -> Just <$> either (Left . ((ctx <> ": ") <>)) Right
+                       (langText table form)
 
-  name <- case field "name" >>= safeHead >>= sexpString of
-    Just n  -> Right n
-    Nothing -> Left (ctx <> ": missing (name \"…\")")
+  name <- textField "name" >>= maybe (Left (ctx <> ": missing (name …)")) Right
 
   category <- case field "category" of
     Just [SSym "general"] -> Right CatGeneral
@@ -141,7 +148,7 @@ compileItem (idForm : body) = do
     Nothing    -> Right emptyStats
     Just parts -> foldM' (parseStat ctx) emptyStats parts
 
-  let desc = maybe "" id (field "desc" >>= safeHead >>= sexpString)
+  desc <- maybe "" id <$> textField "desc"
 
   Right ItemDef
     { defId = ItemId rawId, defName = name, defCategory = category
@@ -181,11 +188,11 @@ parseStat ctx st form = case form of
 --------------------------------------------------------------------------------
 
 -- | Load and compile the item database (UTF-8, BOM-agnostic on Windows).
-loadRegistry :: FilePath -> IO (Either String ItemRegistry)
-loadRegistry path = do
+loadRegistry :: LangTable -> FilePath -> IO (Either String ItemRegistry)
+loadRegistry table path = do
   bytes <- BS.readFile path
   pure $ case decodeUtf8' bytes of
     Left err  -> Left (path <> ": not valid UTF-8 (" <> show err <> ")")
-    Right txt -> parseSexps (stripBom txt) >>= compileRegistry
+    Right txt -> parseSexps (stripBom txt) >>= compileRegistry table
   where
     stripBom t = maybe t id (T.stripPrefix "\65279" t)

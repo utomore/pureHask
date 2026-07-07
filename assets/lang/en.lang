@@ -1,0 +1,73 @@
+;; pureHask English string table. Same keys as zh-TW.lang.
+
+;; ---- engine UI ----
+ui.quest.started   = QUEST STARTED:
+ui.quest.completed = QUEST COMPLETE:
+
+;; ---- items ----
+item.gold-key.name     = GOLD KEY
+item.gold-key.desc     = OPENS THE ABYSS GATE
+item.potion-hp-s.name  = SMALL POTION
+item.potion-hp-s.desc  = RESTORES 30 HP
+item.sword-rusty.name  = RUSTY SWORD
+item.sword-rusty.desc  = IT HAS SEEN BETTER DAYS
+item.boots-swift.name  = SWIFT BOOTS
+item.boots-swift.desc  = PLUS 15 PCT MOVE SPEED
+
+;; ---- quests ----
+quest.find-key.name        = THE LOST KEY
+quest.find-key.collect.goal = FIND THE GOLD KEY
+quest.find-key.collect.toast = THE KEY HUMS FAINTLY
+quest.find-key.escape.goal = REACH THE EXIT GATE
+quest.find-key.escape.toast = REWARD: SMALL POTION
+quest.meet-elder.name      = MEET THE ELDER
+quest.meet-elder.talk.goal = TALK TO THE ELDER - PRESS E
+quest.cull-slimes.name     = CULL THE SLIMES
+quest.cull-slimes.cull.goal = DEFEAT 2 SLIMES - Z TO ATTACK
+quest.cull-slimes.cull.toast = THE HOLLOW IS SAFER NOW
+
+;; ---- NPCs ----
+npc.elder.name      = ELDER
+npc.elder.chat.1    = MY BACK ACHES...
+npc.elder.chat.2    = THE ABYSS HUMS TONIGHT.
+npc.elder.done.1    = THE GATE KNOWS YOUR NAME NOW.
+npc.elder.hint.1    = THE KEY LIES ON THE HIGH LEDGE.
+npc.elder.hint.2    = DOUBLE TAP TO DASH. PRESS A FOR THE HOOK.
+npc.elder.hello.1   = WELCOME, TRAVELLER.
+npc.elder.hello.2   = FIND THE GOLD KEY TO PASS THE GATE.
+
+npc.elder-echo.name     = ECHO OF THE ELDER
+npc.elder-echo.chat.1   = ...DO ECHOES GROW OLD TOO...
+npc.elder-echo.praise.1 = THE HOLLOW'S WIND CARRIES PRAISE FOR YOU.
+
+npc.miner.name      = OLD MINER
+npc.miner.chat.1    = THE VEINS ARE CLOGGED WITH SLIME...
+npc.miner.chat.2    = WATCH YOUR STEP.
+npc.miner.done.1    = THE HOLLOW IS QUIET AGAIN. THANK YOU.
+npc.miner.done.2    = ARCHERS ROAM THE ECHO HILLS ABOVE. DODGE THEIR ARROWS!
+npc.miner.hello.1   = THESE SLIMES ATE MY MINE CART!
+npc.miner.hello.2   = PRESS Z TO SWING. HOLD TO CHARGE A THRUST.
+npc.miner.hello.3   = CLEAR THEM OUT FOR ME.
+
+npc.hermit.name     = HERMIT
+npc.hermit.chat.1   = THERE ARE ECHOES ON THE WIND...
+npc.hermit.chat.2   = BEYOND THE WALL LIES THE ABYSS.
+npc.hermit.again.1  = REMEMBER: JUMP MID-DASH TO CARRY YOUR MOMENTUM.
+npc.hermit.hello.1  = LISTEN WELL, TRAVELLER.
+npc.hermit.hello.2  = DOUBLE TAP TO DASH. JUMP WHILE DASHING --
+npc.hermit.hello.3  = THE MOMENTUM WILL CARRY YOU ACROSS THE RIFT.
+
+npc.gatekeeper.name    = GATEKEEPER
+npc.gatekeeper.chat.1  = BEYOND THIS GATE, THE ABYSS HUMS.
+npc.gatekeeper.chat.2  = FEW MAKE IT THIS FAR.
+npc.gatekeeper.done.1  = THE KEY'S ECHO TRAVELS WITH YOU.
+npc.gatekeeper.done.2  = FELL THE WARDEN AND THE GATE OPENS.
+npc.gatekeeper.hello.1 = HALT, TRAVELLER.
+npc.gatekeeper.hello.2 = THE WARDEN GUARDS THE GATE. FAR TOUGHER THAN SLIMES.
+npc.gatekeeper.hello.3 = A CHARGED THRUST WILL WOUND IT DEEPLY.
+
+;; ---- enemies ----
+enemy.slime.name  = SLIME
+enemy.slime-red.name = RED SLIME
+enemy.archer.name = ABYSS ARCHER
+enemy.brute.name  = WARDEN

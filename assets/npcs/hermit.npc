@@ -1,0 +1,15 @@
+;; 隱士:住在回聲之丘(關卡 04),教玩家衝刺跳躍。
+
+(npc hermit
+  (name npc.hermit.name)
+  (color 130 170 220)
+  (size 24 32)
+  (spawn-at 04-echoes 20 13)
+  (movement (idle))
+  (chatter 12 npc.hermit.chat.1 npc.hermit.chat.2)
+  (dialogue
+    (rule (flag met-hermit)
+      (say hermit npc.hermit.again.1))
+    (default
+      (say hermit npc.hermit.hello.1 npc.hermit.hello.2 npc.hermit.hello.3)
+      (set-flag met-hermit))))

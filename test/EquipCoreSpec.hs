@@ -11,7 +11,7 @@ import Sim.EquipCore
 
 testRegistry :: ItemRegistry
 testRegistry =
-  let Right reg = parseSexps (T.pack src) >>= compileRegistry
+  let Right reg = parseSexps (T.pack src) >>= compileRegistry M.empty
   in reg
   where
     src = "(item sword-a (name \"SWORD A\") (category equip weapon) (stats (atk 5)))\

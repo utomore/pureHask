@@ -35,6 +35,7 @@ import Data.Text (Text)
 import Linear (V2(..), norm)
 
 import Core.Config (tileSize)
+import Core.Lang (LangTable, langText)
 import Core.Types (ItemId(..), QuestId(..), NpcId(..), QuestPhase(..))
 import Script.Sexp
 
@@ -117,9 +118,11 @@ compileCond form = case form of
     | Just name <- sexpString nameForm -> Right (CLevelIs name)
   _ -> Left ("unknown condition " <> show form)
 
--- | Compile one action form, e.g. @(give-item potion-hp-s 2)@.
-compileAction :: Sexp -> Either String Action
-compileAction form = case form of
+-- | Compile one action form, e.g. @(give-item potion-hp-s 2)@. Display-text
+--   positions (@say@ lines, @toast@ messages) accept string literals or
+--   text keys resolved against the 'LangTable'.
+compileAction :: LangTable -> Sexp -> Either String Action
+compileAction table form = case form of
   SList [SSym "set-flag", SSym name]   -> Right (ASetFlag name)
   SList [SSym "clear-flag", SSym name] -> Right (AClearFlag name)
   SList [SSym "give-item", SSym iid, SNum n] -> Right (AGiveItem (ItemId iid) (round n))
@@ -127,10 +130,8 @@ compileAction form = case form of
   SList [SSym "take-item", SSym iid, SNum n] -> Right (ATakeItem (ItemId iid) (round n))
   SList [SSym "take-item", SSym iid]         -> Right (ATakeItem (ItemId iid) 1)
   SList (SSym "say" : SSym speaker : rest)
-    | not (null rest), Just lns <- mapM sexpString rest ->
-        Right (ASay speaker lns)
-  SList [SSym "toast", msgForm]
-    | Just msg <- sexpString msgForm -> Right (AToast msg)
+    | not (null rest) -> ASay speaker <$> mapM (langText table) rest
+  SList [SSym "toast", msgForm] -> AToast <$> langText table msgForm
   SList [SSym "offer-quest", SSym q]    -> Right (AOfferQuest (QuestId q))
   SList [SSym "advance-quest", SSym q]  -> Right (AAdvanceQuest (QuestId q))
   SList [SSym "complete-quest", SSym q] -> Right (ACompleteQuest (QuestId q))

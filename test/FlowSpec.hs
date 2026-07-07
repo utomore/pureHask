@@ -33,7 +33,7 @@ sampleEnv = MenuEnv
                     : [ (slot, Nothing) | slot <- [SlotBody ..] ]
   , meSaveSlots = [Just "LV 1  00:30", Nothing, Nothing]
   , meAutoSave  = Just "LV 2  10:00"
-  , meSettings  = [("SHOW FPS", False), ("FULLSCREEN", False)]
+  , meSettings  = [("SHOW FPS", "OFF"), ("FULLSCREEN", "OFF"), ("FONT", "PIXEL"), ("LANGUAGE", "EN")]
   }
 
 spec :: Spec

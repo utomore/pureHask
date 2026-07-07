@@ -14,7 +14,8 @@
 --   >     (objective (reach-goal))
 --   >     (on-complete (give-item potion-hp-s 1) (complete-quest find-key))))
 --
---   Objectives: @(collect ITEM N)@, @(reach-goal)@, @(talk-to NPC)@.
+--   Objectives: @(collect ITEM N)@, @(reach-goal)@, @(talk-to NPC)@,
+--   @(kill ENEMY N)@.
 --   On-complete actions use the shared vocabulary of "Script.Expr".
 --   Adding a quest = adding a file. No recompilation.
 module Quest.Script
@@ -24,6 +25,7 @@ module Quest.Script
   , compileQuest
   , loadQuestDir
   , questItemRefs
+  , questEnemyRefs
   ) where
 
 import qualified Data.ByteString as BS
@@ -34,7 +36,8 @@ import Data.Text.Encoding (decodeUtf8')
 import System.Directory (listDirectory, doesDirectoryExist)
 import System.FilePath ((</>))
 
-import Core.Types (ItemId(..), QuestId(..), NpcId(..))
+import Core.Lang (LangTable, langText)
+import Core.Types (ItemId(..), QuestId(..), NpcId(..), EnemyId(..))
 import Script.Expr
 import Script.Sexp
 
@@ -43,6 +46,7 @@ data Objective
   = ObjCollect !ItemId !Int
   | ObjReachGoal
   | ObjTalkTo !NpcId
+  | ObjKill !EnemyId !Int
   deriving (Eq, Show)
 
 data QuestStage = QuestStage
@@ -59,20 +63,21 @@ data QuestDef = QuestDef
   , qdStages :: ![QuestStage]
   } deriving (Eq, Show)
 
--- | Compile one @(quest …)@ form.
-compileQuest :: [Sexp] -> Either String QuestDef
-compileQuest [] = Left "quest: (quest …) without an id"
-compileQuest (idForm : body) = do
+-- | Compile one @(quest …)@ form. Display text (name/goal, say/toast in
+--   on-complete) accepts string literals or 'Core.Lang' text keys.
+compileQuest :: LangTable -> [Sexp] -> Either String QuestDef
+compileQuest _ [] = Left "quest: (quest …) without an id"
+compileQuest table (idForm : body) = do
   rawId <- maybe (Left "quest: id must be a symbol") Right (sexpSymbol idForm)
   let ctx = "quest '" <> T.unpack rawId <> "'"
 
-  name <- case fieldOf "name" body >>= safeHead >>= sexpString of
-    Just n  -> Right n
-    Nothing -> Left (ctx <> ": missing (name \"…\")")
+  name <- case fieldOf "name" body >>= safeHead of
+    Just form -> either (Left . ((ctx <> ": ") <>)) Right (langText table form)
+    Nothing   -> Left (ctx <> ": missing (name …)")
 
   let auto = fieldOf "auto-start" body /= Nothing
 
-  stages <- mapM (compileStage ctx) (formsNamed "stage" body)
+  stages <- mapM (compileStage table ctx) (formsNamed "stage" body)
   if null stages
     then Left (ctx <> ": needs at least one (stage …)")
     else Right (QuestDef (QuestId rawId) name auto stages)
@@ -80,16 +85,16 @@ compileQuest (idForm : body) = do
     safeHead (x : _) = Just x
     safeHead []      = Nothing
 
-compileStage :: String -> [Sexp] -> Either String QuestStage
-compileStage ctx [] = Left (ctx <> ": (stage …) without a name")
-compileStage ctx (nameForm : body) = do
+compileStage :: LangTable -> String -> [Sexp] -> Either String QuestStage
+compileStage _ ctx [] = Left (ctx <> ": (stage …) without a name")
+compileStage table ctx (nameForm : body) = do
   stageName <- maybe (Left (ctx <> ": stage name must be a symbol")) Right
                  (sexpSymbol nameForm)
   let sctx = ctx <> " stage '" <> T.unpack stageName <> "'"
 
-  goal <- case fieldOf "goal" body >>= safeHead >>= sexpString of
-    Just g  -> Right g
-    Nothing -> Left (sctx <> ": missing (goal \"…\")")
+  goal <- case fieldOf "goal" body >>= safeHead of
+    Just form -> either (Left . ((sctx <> ": ") <>)) Right (langText table form)
+    Nothing   -> Left (sctx <> ": missing (goal …)")
 
   objective <- case fieldOf "objective" body of
     Just [form] -> compileObjective sctx form
@@ -97,8 +102,9 @@ compileStage ctx (nameForm : body) = do
 
   actions <- case fieldOf "on-complete" body of
     Nothing    -> Right []
-    Just forms -> mapM (either (Left . ((sctx <> ": ") <>)) Right . compileAction)
-                    forms >>= Right
+    Just forms -> mapM (either (Left . ((sctx <> ": ") <>)) Right
+                          . compileAction table)
+                    forms
 
   Right (QuestStage stageName goal objective actions)
   where
@@ -111,6 +117,8 @@ compileObjective ctx form = case form of
   SList [SSym "collect", SSym iid]         -> Right (ObjCollect (ItemId iid) 1)
   SList [SSym "reach-goal"]                -> Right ObjReachGoal
   SList [SSym "talk-to", SSym npc]         -> Right (ObjTalkTo (NpcId npc))
+  SList [SSym "kill", SSym eid, SNum n]    -> Right (ObjKill (EnemyId eid) (round n))
+  SList [SSym "kill", SSym eid]            -> Right (ObjKill (EnemyId eid) 1)
   _ -> Left (ctx <> ": unknown objective " <> show form)
 
 -- | All item ids a quest references (objectives + actions), for startup
@@ -123,10 +131,16 @@ questItemRefs qd = concatMap stageRefs (qdStages qd)
     objRefs (ObjCollect iid _) = [iid]
     objRefs _                  = []
 
+-- | All enemy ids a quest references, for startup validation against the
+--   enemy definitions.
+questEnemyRefs :: QuestDef -> [EnemyId]
+questEnemyRefs qd =
+  [ eid | st <- qdStages qd, ObjKill eid _ <- [qsObjective st] ]
+
 -- | Load and compile every @*.quest@ file in a directory (sorted by name).
 --   A missing directory simply means no quests.
-loadQuestDir :: FilePath -> IO (Either String [QuestDef])
-loadQuestDir dir = do
+loadQuestDir :: LangTable -> FilePath -> IO (Either String [QuestDef])
+loadQuestDir table dir = do
   exists <- doesDirectoryExist dir
   if not exists
     then pure (Right [])
@@ -142,5 +156,5 @@ loadQuestDir dir = do
         Left err -> Left (path <> ": not valid UTF-8 (" <> show err <> ")")
         Right txt -> do
           forms <- either (Left . ((path <> ": ") <>)) Right (parseSexps txt)
-          mapM (either (Left . ((path <> ": ") <>)) Right . compileQuest)
+          mapM (either (Left . ((path <> ": ") <>)) Right . compileQuest table)
                (formsNamed "quest" forms)

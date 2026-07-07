@@ -1,20 +1,20 @@
-;; The first quest: auto-starts with a new game.
-;; Adding a quest = adding a file like this one. No recompilation.
+;; 第一個任務:開新遊戲自動開始。
+;; 顯示文字以裸符號引用 assets/lang/*.lang 的 key。
 
 (quest find-key
-  (name "THE LOST KEY")
+  (name quest.find-key.name)
   (auto-start)
   (stage collect
-    (goal "FIND THE GOLD KEY")
+    (goal quest.find-key.collect.goal)
     (objective (collect gold-key 1))
     (on-complete
-      (toast "THE KEY HUMS FAINTLY")
+      (toast quest.find-key.collect.toast)
       (advance-quest find-key)))
   (stage escape
-    (goal "REACH THE EXIT GATE")
+    (goal quest.find-key.escape.goal)
     (objective (reach-goal))
     (on-complete
       (give-item potion-hp-s 1)
-      (toast "REWARD: SMALL POTION")
+      (toast quest.find-key.escape.toast)
       (set-flag first-key-found)
       (complete-quest find-key))))

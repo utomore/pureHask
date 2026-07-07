@@ -60,6 +60,7 @@ stepIntents dt raw trk = (tracker', FrameInput intents held)
       , [ IntentToggleBackpack | pressed rawBackpack ]
       , [ IntentHook           | pressed rawHook ]
       , [ IntentUsePotion      | pressed rawUsePotion ]
+      , [ IntentInteract       | pressed rawInteract ]
       , [ IntentMenu           | pressed rawMenu ]
       , [ IntentNavLeft        | pressed rawLeft ]
       , [ IntentNavRight       | pressed rawRight ]

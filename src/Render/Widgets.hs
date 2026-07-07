@@ -13,7 +13,7 @@ import qualified SDL
 import Linear (V2(..), V4(..))
 
 import Render.Draw (toSDLRect)
-import Render.Font (drawText)
+import Render.Font (FontSet(..), drawText)
 
 type Color = V4 Int
 
@@ -43,8 +43,8 @@ drawBar renderer pos size@(V2 w h) fraction fillColor = do
   SDL.drawRect renderer (Just (toSDLRect pos size))
 
 -- | A bar with a small label to its left (e.g. @HP@).
-drawLabelledBar :: SDL.Renderer -> V2 Double -> V2 Double -> Double
+drawLabelledBar :: FontSet -> V2 Double -> V2 Double -> Double
                 -> Color -> String -> IO ()
-drawLabelledBar renderer (V2 x y) size fraction fillColor label = do
-  drawText renderer (V4 170 190 215 255) 1.5 (V2 x (y + 1.0)) label
-  drawBar renderer (V2 (x + 24.0) y) size fraction fillColor
+drawLabelledBar fonts (V2 x y) size fraction fillColor label = do
+  drawText fonts (V4 170 190 215 255) 1.5 (V2 x (y + 1.0)) label
+  drawBar (fsRenderer fonts) (V2 (x + 24.0) y) size fraction fillColor

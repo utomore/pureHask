@@ -1,0 +1,75 @@
+;; pureHask 正體中文字串表。
+;; 內容檔(items/quests/npcs/enemies)以「裸符號」引用這裡的 key;
+;; 缺 key = 啟動失敗。新語言 = 複製本檔翻譯 + Core.Settings 加一個建構子。
+
+;; ---- 引擎 UI ----
+ui.quest.started   = 任務開始:
+ui.quest.completed = 任務完成:
+
+;; ---- 道具 ----
+item.gold-key.name     = 金鑰匙
+item.gold-key.desc     = 能開啟深淵之門
+item.potion-hp-s.name  = 小型藥水
+item.potion-hp-s.desc  = 回復 30 點生命
+item.sword-rusty.name  = 生鏽的劍
+item.sword-rusty.desc  = 它曾有過更好的歲月
+item.boots-swift.name  = 疾風之靴
+item.boots-swift.desc  = 移動速度提升 15 趴
+
+;; ---- 任務 ----
+quest.find-key.name        = 遺失的鑰匙
+quest.find-key.collect.goal = 找到金鑰匙
+quest.find-key.collect.toast = 鑰匙發出微弱的嗡鳴
+quest.find-key.escape.goal = 抵達出口大門
+quest.find-key.escape.toast = 獲得獎勵:小型藥水
+quest.meet-elder.name      = 拜訪長老
+quest.meet-elder.talk.goal = 與長老交談 - 按 E
+quest.cull-slimes.name     = 清剿史萊姆
+quest.cull-slimes.cull.goal = 擊敗 2 隻史萊姆 - Z 攻擊
+quest.cull-slimes.cull.toast = 幽谷安全多了
+
+;; ---- NPC ----
+npc.elder.name      = 長老
+npc.elder.chat.1    = 我的老腰啊……
+npc.elder.chat.2    = 今晚深淵在低鳴。
+npc.elder.done.1    = 大門已經記住你的名字了。
+npc.elder.hint.1    = 金鑰匙在高處的岩架上。
+npc.elder.hint.2    = 雙擊方向鍵衝刺,按 A 使用鉤索。
+npc.elder.hello.1   = 歡迎,旅行者。
+npc.elder.hello.2   = 找到金鑰匙,才能通過深淵之門。
+
+npc.elder-echo.name     = 長老的回聲
+npc.elder-echo.chat.1   = ……回聲,也會老嗎……
+npc.elder-echo.praise.1 = 幽谷的風,替你捎來了讚許。
+
+npc.miner.name      = 老礦工
+npc.miner.chat.1    = 礦脈都被黏液堵住了……
+npc.miner.chat.2    = 小心腳下。
+npc.miner.done.1    = 谷裡清淨多了,謝謝你。
+npc.miner.done.2    = 上頭的回聲之丘有弓手出沒,躲開他們的箭!
+npc.miner.hello.1   = 這些史萊姆吞了我的礦車!
+npc.miner.hello.2   = 按 Z 揮劍,長按蓄力可以刺擊。
+npc.miner.hello.3   = 替我清掉牠們吧。
+
+npc.hermit.name     = 隱士
+npc.hermit.chat.1   = 風裡有回聲……
+npc.hermit.chat.2   = 牆外即是深淵。
+npc.hermit.again.1  = 記住:衝刺中起跳,能帶著衝勁飛得更遠。
+npc.hermit.hello.1  = 旅人,聽好了。
+npc.hermit.hello.2  = 雙擊方向鍵衝刺,衝刺中按跳躍——
+npc.hermit.hello.3  = 動能會帶著你飛越裂谷。
+
+npc.gatekeeper.name    = 守門人
+npc.gatekeeper.chat.1  = 門後即是低鳴的深淵。
+npc.gatekeeper.chat.2  = 很少有人走到這裡。
+npc.gatekeeper.done.1  = 鑰匙的回響已隨你而來。
+npc.gatekeeper.done.2  = 擊倒巨衛,深淵之門為你敞開。
+npc.gatekeeper.hello.1 = 止步,旅人。
+npc.gatekeeper.hello.2 = 巨衛守著大門,牠比史萊姆頑強得多。
+npc.gatekeeper.hello.3 = 蓄力刺擊能重創牠。
+
+;; ---- 敵人 ----
+enemy.slime.name  = 史萊姆
+enemy.slime-red.name = 赤紅史萊姆
+enemy.archer.name = 深淵射手
+enemy.brute.name  = 巨衛

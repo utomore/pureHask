@@ -96,6 +96,12 @@ dashCooldownDuration = 0.6
 dashSpeed :: Double
 dashSpeed = 800.0
 
+-- | Fraction of the dash speed carried into a dash jump (jump pressed while
+--   dashing). 0.85 * 800 = 680 px/s, well above the 300 px/s run speed, so
+--   the technique is worth mastering.
+dashJumpCarryFactor :: Double
+dashJumpCarryFactor = 0.85
+
 meleeDuration :: Double
 meleeDuration = 0.18
 
@@ -131,6 +137,47 @@ hookPullSpeed = 850.0
 -- | Distance to the anchor below which pulling turns into hanging.
 hookArriveDist :: Double
 hookArriveDist = 12.0
+
+--------------------------------------------------------------------------------
+-- Damage
+--------------------------------------------------------------------------------
+
+-- | The player's unarmed attack damage; weapon @atk@ stats add on top.
+playerBaseAtk :: Double
+playerBaseAtk = 12.0
+
+-- | Damage multiplier of the charged thrust relative to a normal swing.
+thrustDamageMult :: Double
+thrustDamageMult = 1.6
+
+-- | Damage multiplier of the plunge relative to a normal swing.
+plungeDamageMult :: Double
+plungeDamageMult = 1.3
+
+-- | Seconds of invulnerability after the player takes a hit.
+playerInvulnDuration :: Double
+playerInvulnDuration = 0.8
+
+-- | Seconds an enemy cannot be damaged again after taking a hit, so one
+--   swing does not land on every 1/120s sub-step.
+enemyHurtCooldown :: Double
+enemyHurtCooldown = 0.3
+
+-- | Enemy projectile collider edge (pixels).
+enemyProjectileSize :: Double
+enemyProjectileSize = 10.0
+
+--------------------------------------------------------------------------------
+-- Particles
+--------------------------------------------------------------------------------
+
+-- | Hard cap on live particles; the oldest are dropped past it.
+maxParticles :: Int
+maxParticles = 600
+
+-- | Minimum landing speed (pixels/sec) that kicks up dust.
+landingDustMinSpeed :: Double
+landingDustMinSpeed = 260.0
 
 --------------------------------------------------------------------------------
 -- Input semantics

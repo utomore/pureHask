@@ -19,6 +19,8 @@ import Linear (V2(..))
 
 import Core.Types
 import Npc.Core (NpcAi)
+import Sim.EnemyCore (EnemyAi)
+import Sim.ParticleCore (Particle)
 
 -- | Position of an entity in 2D space (top-left corner, pixels).
 newtype Position = Position (V2 Double) deriving (Eq, Show)
@@ -68,10 +70,35 @@ data VFX = VFX !Double !VFXType !(Maybe Direction) deriving (Eq, Show)
 instance Component VFX where
   type Storage VFX = Map VFX
 
--- | Projectile marker with travel direction. Reserved for ranged enemies.
-data Projectile = Projectile { projDir :: !Direction } deriving (Eq, Show)
+-- | A hostile projectile (spawned by ranged enemies) and its damage.
+newtype Projectile = Projectile { projDamage :: Double } deriving (Eq, Show)
 instance Component Projectile where
   type Storage Projectile = Map Projectile
+
+-- | Marker for enemy entities (which definition they instantiate).
+newtype Enemy = Enemy EnemyId deriving (Eq, Show)
+instance Component Enemy where
+  type Storage Enemy = Map Enemy
+
+-- | The enemy's pure AI state (see "Sim.EnemyCore").
+newtype EnemyBrain = EnemyBrain EnemyAi deriving (Eq, Show)
+instance Component EnemyBrain where
+  type Storage EnemyBrain = Map EnemyBrain
+
+-- | Enemy hit points.
+newtype EnemyHp = EnemyHp Double deriving (Eq, Show)
+instance Component EnemyHp where
+  type Storage EnemyHp = Map EnemyHp
+
+-- | Seconds an enemy stays immune after a hit (one swing, one hit).
+newtype EnemyHurt = EnemyHurt Double deriving (Eq, Show)
+instance Component EnemyHurt where
+  type Storage EnemyHurt = Map EnemyHurt
+
+-- | The player's remaining invulnerability window after taking damage.
+newtype Invuln = Invuln Double deriving (Eq, Show)
+instance Component Invuln where
+  type Storage Invuln = Map Invuln
 
 -- | An item lying in the level. The id is validated against the item
 --   registry at startup.
@@ -133,6 +160,15 @@ instance Monoid EventQueue where mempty = EventQueue []
 instance Component EventQueue where
   type Storage EventQueue = Global EventQueue
 
+-- | Global particle buffer (see "Sim.ParticleCore"): one list, stepped as a
+--   pure function each fixed sub-step by "Sim.Particles".
+newtype ParticleStore = ParticleStore [Particle]
+instance Semigroup ParticleStore where
+  ParticleStore a <> ParticleStore b = ParticleStore (a <> b)
+instance Monoid ParticleStore where mempty = ParticleStore []
+instance Component ParticleStore where
+  type Storage ParticleStore = Global ParticleStore
+
 makeWorld "World"
   [ ''Position
   , ''Velocity
@@ -154,8 +190,14 @@ makeWorld "World"
   , ''StatsCache
   , ''Npc
   , ''NpcBrain
+  , ''Enemy
+  , ''EnemyBrain
+  , ''EnemyHp
+  , ''EnemyHurt
+  , ''Invuln
   , ''UIState
   , ''EventQueue
+  , ''ParticleStore
   ]
 
 -- | The game monad: an Apecs System over our World.

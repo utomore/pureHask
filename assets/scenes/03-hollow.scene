@@ -1,0 +1,19 @@
+;; 關卡 03「幽谷」的視差佈景:陰冷的綠色洞窟。
+
+(scene
+  (layer back-3 (parallax 0.2)
+    (prop silhouette-hills -300 340 1400 300)
+    (prop silhouette-spire 900 200 90 420))
+  (layer back-2 (parallax 0.5)
+    (prop pillar 340 100 52 520)
+    (prop crystal 520 300 22 36)
+    (prop crystal 1100 240 26 42))
+  (layer back-1 (parallax 0.75)
+    (prop glow 260 320 180 100)
+    (prop pillar 1000 180 40 440))
+  (layer front-1 (parallax 1.15) (alpha 210)
+    (prop hanging-vine 200 0 18 120)
+    (prop hanging-vine 760 0 26 160)
+    (prop hanging-vine 1400 0 20 100))
+  (layer front-3 (parallax 1.5) (alpha 140)
+    (prop fog-band -400 430 3200 90)))

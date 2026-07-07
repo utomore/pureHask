@@ -1,10 +1,10 @@
-;; A talk quest: complete by speaking to the elder (E key).
+;; 對話任務:與長老交談(E 鍵)即完成。
 
 (quest meet-elder
-  (name "MEET THE ELDER")
+  (name quest.meet-elder.name)
   (auto-start)
   (stage talk
-    (goal "TALK TO THE ELDER - PRESS E")
+    (goal quest.meet-elder.talk.goal)
     (objective (talk-to elder))
     (on-complete
       (complete-quest meet-elder))))

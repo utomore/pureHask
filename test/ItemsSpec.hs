@@ -11,7 +11,7 @@ import Sim.Items
 
 testRegistry :: ItemRegistry
 testRegistry =
-  let Right reg = parseSexps (T.pack src) >>= compileRegistry
+  let Right reg = parseSexps (T.pack src) >>= compileRegistry M.empty
   in reg
   where
     src = "(item potion-a (name \"A\") (category potion) (use (heal 30)))\

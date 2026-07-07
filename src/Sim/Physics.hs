@@ -15,6 +15,8 @@ import Linear (V2(..), norm)
 import Core.Components
 import Core.Config
 import Core.Types
+import Sim.ParticleCore (burstFor, landingBurst)
+import Sim.Particles (emitParticles)
 import World.Tilemap
 
 -- | One fixed physics sub-step for all entities.
@@ -81,11 +83,16 @@ stepPhysics tilemap dt = do
             let V2 pw ph = size
                 shockwavePos = np + V2 (pw / 2.0) (ph - 4.0)
             _ <- newEntity (Position shockwavePos, VFX 0.3 VFXShockwave Nothing)
+            emitParticles (burstFor VFXShockwave shockwavePos Nothing)
             return (np, V2 0.0 0.0, True, StateIdle 0.0)
           else return (np, nv, g', StatePlunge)
 
       _ -> do
         let (np, nv, g') = resolveCollisions tilemap pos (V2 vx vy') size dt
+        -- Landing dust; the speed threshold lives in the pure emitter.
+        when (g' && not grounded) $ do
+          let V2 pw ph = size
+          emitParticles (landingBurst vy' (np + V2 (pw / 2.0) (ph - 2.0)))
         return (np, nv, g', cstate)
 
     -- Touching ground restores the double jump.

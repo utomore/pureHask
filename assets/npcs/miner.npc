@@ -1,0 +1,14 @@
+;; 礦工:駐守幽谷(關卡 03),提醒玩家史萊姆的威脅。
+
+(npc miner
+  (name npc.miner.name)
+  (color 170 140 90)
+  (size 24 32)
+  (spawn-at 03-hollow 7 13)
+  (movement (patrol 5 10) (speed 30) (pause 2.0))
+  (chatter 10 npc.miner.chat.1 npc.miner.chat.2)
+  (dialogue
+    (rule (quest-state cull-slimes done)
+      (say miner npc.miner.done.1 npc.miner.done.2))
+    (default
+      (say miner npc.miner.hello.1 npc.miner.hello.2 npc.miner.hello.3))))

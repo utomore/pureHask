@@ -1,0 +1,12 @@
+;; 擊殺任務:示範 (kill ENEMY N) 目標。
+
+(quest cull-slimes
+  (name quest.cull-slimes.name)
+  (auto-start)
+  (stage cull
+    (goal quest.cull-slimes.cull.goal)
+    (objective (kill slime 2))
+    (on-complete
+      (toast quest.cull-slimes.cull.toast)
+      (give-item potion-hp-s 1)
+      (complete-quest cull-slimes))))

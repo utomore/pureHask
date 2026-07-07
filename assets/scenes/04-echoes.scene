@@ -1,0 +1,16 @@
+;; 關卡 04「回聲之丘」的視差佈景:乾燥的高地,遠方尖塔回響。
+
+(scene
+  (layer back-3 (parallax 0.2)
+    (prop silhouette-spire 150 120 110 540)
+    (prop silhouette-spire 700 60 130 600)
+    (prop silhouette-hills -200 380 1600 260))
+  (layer back-2 (parallax 0.5)
+    (prop pillar 450 80 58 540)
+    (prop crystal 900 200 24 40))
+  (layer back-1 (parallax 0.75)
+    (prop glow 620 240 220 130))
+  (layer front-2 (parallax 1.3) (alpha 190)
+    (prop hanging-vine 500 0 20 120))
+  (layer front-3 (parallax 1.55) (alpha 130)
+    (prop dust-band -400 320 3400 100)))

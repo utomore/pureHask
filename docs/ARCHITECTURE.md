@@ -86,12 +86,17 @@
   Script.Sexp      -- S-expression parser(所有外部資料檔的語法)
 
 第 1 層(純邏輯,只依賴第 0 層;每個模組都有對應 Spec):
+  Core.Lang        -- 字串表(assets/lang/*.lang;顯示文字 key 化,i18n 接縫)
   Input.Semantics  -- 意圖機(edge/雙擊 → Intent)
   Flow.Machine     -- 流程機(GameMode/選單導航/對話推進)
-  Sim.CombatCore   -- 戰鬥機(含耐力把關)
+  Sim.CombatCore   -- 戰鬥機(含耐力把關、衝刺跳躍)
+  Sim.EnemyCore    -- 敵人行為樹求值器(反應式)+ 玩家攻擊 hitbox 表
+  Sim.ParticleCore -- 粒子:純積分步進 + 決定性發射器
   Sim.EquipCore    -- 穿脫規則 + DerivedStats 計算
   Sim.Items        -- 用藥效果、背包純操作
+  Enemy.Script     -- 敵人 DSL schema(assets/enemies/*.enemy)
   Script.Expr      -- DSL 條件/動作 AST + 求值器(任務/NPC 共用詞彙)
+  Script.Inherit   -- (inherit BASE) 表單層展開(道具/敵人共用)
   Quest.Script / Quest.Runtime -- 任務 schema + 任務機(QuestLog)
   Npc.Script / Npc.Core        -- NPC schema + 巡邏 AI 機 + 對話規則求值
   Hud.Machine      -- toast 佇列機
@@ -102,20 +107,31 @@
 
 第 2 層(綁定框架的膠水,禁止決策邏輯):
   Core.Components  -- 唯一的 Apecs Component 註冊點(makeWorld)
-  FRP.Network      -- 唯一碰 Reflex 的模組(fold 意圖機 + Game.Logic)
+  Game.Assets      -- 定義資產管線:載入+交叉驗證 → GameDefs(啟動/熱重載/--validate 共用)
+  FRP.Network      -- 唯一碰 Reflex 的模組(fold 意圖機 + Game.Logic;defs 每次觸發從 IORef 讀)
   Sim.Combat / Sim.Physics / Sim.Rules / Sim.Spawn / Sim.Npc -- Apecs 讀寫
+  Sim.Enemy / Sim.Damage / Sim.Particles                     -- Apecs 讀寫
   Render.Font / Widgets / Layers / Draw / Hud / Menu / UI    -- 繪製
+                   (Font 有雙後端:內建 3x5 像素字型 + SDL2_ttf 繁中 TTF,
+                    由設定選單的 FONT 列切換;所有繪字走每幀的 FontSet)
 
 第 3 層(殼):
   app/Main.hs      -- SDL 初始化、主迴圈、Flow/WorldCommand 執行、
                       啟動期資產載入與交叉驗證。禁止邏輯。
 ```
 
-外部資料(改檔即改遊戲,不重編譯):`assets/levels/*.txt`(關卡)、
-`assets/items/items.def`(道具)、`assets/quests/*.quest`(任務)、
-`assets/npcs/*.npc`(NPC)、`assets/scenes/*.scene`(視差佈景)、
+外部資料(改檔即改遊戲,不重編譯;**寫法教學見 [DSL_GUIDE.md](DSL_GUIDE.md)**):
+`assets/levels/*.txt`(關卡)、`assets/items/items.def`(道具)、
+`assets/quests/*.quest`(任務)、`assets/npcs/*.npc`(NPC)、
+`assets/enemies/*.enemy`(敵人)、`assets/scenes/*.scene`(視差佈景)、
+`assets/fonts/*.ttf`(TTF 字體,啟動期載入)、
 `config/settings.cfg`(設定)、`saves/*.json`(存檔,gitignore)。
 **全部在啟動期交叉驗證,dangling reference = 啟動失敗。**
+**熱重載**:定義資產(道具/任務/NPC/敵人/字串表)運行中存檔約 1 秒生效;
+關卡/佈景變更則重建**當前關卡**的 world(玩家背包/裝備/血量經
+`capturePlayer`/`applyPlayer` 保留,位置回出生點)。改壞一律保留舊資料
+並印錯誤。新增/刪除關卡檔需重啟(關卡數烙進流程機與存檔)。
+`pureHask --validate` 無視窗跑完整驗證(所有語言,exit 0/1,適合 CI)。
 
 測試(test/,hspec,170+ 測例):每個第 1 層純模組一個 Spec。**測試永遠不 import SDL 或 Reflex 模組。**
 
@@ -156,14 +172,19 @@
 6. `Render.Draw` 給它顏色/形狀。
 7. **先寫 `CombatCoreSpec` 測試再實作轉換**(招式是純函式,TDD 成本極低)。
 
-### 3.4 新增敵人(尚未有敵人系統,這是規劃好的路徑)
+### 3.4 新增敵人 ★零程式碼(敵人系統已建成)
 
-1. `Core.Components`:加 `Enemy` 元件(種類、AI 狀態),註冊進 `makeWorld`。
-2. 新模組 `Sim.EnemyCore`(純 AI 狀態機,比照 `CombatCore` 的 In/Out 模式)+ `Sim.Enemy`(Apecs 膠水,掛進 `Main` 的子步序列)。
-3. `World.Level`:加敵人記號(如 `1`/`2`/`3`),`LevelData` 加 `ldEnemies` 欄位,`Sim.Spawn` 生成。
-4. 傷害結算:新增 `Sim.Damage`,收集 Hitbox×Hurtbox 相交後**統一結算**(避免同幀互打的順序 bug);玩家死亡改為發 `EvPlayerDied`。
-5. 遠程敵人請直接使用現成的 `Projectile` 元件與 `updateProjectiles`(它們就是為此保留的)。
-6. `EnemyCoreSpec` 測 AI 轉換。
+1. 在 `assets/enemies/` 放一個 `.enemy` 檔(或在現有檔案加 `(spawn-at …)`)。
+   格式與可調參數(型態/行動方式/攻擊手段)見 [DSL_GUIDE.md](DSL_GUIDE.md) §6。
+2. 完成。啟動期驗證 spawn 關卡名;任務可用 `(kill ENEMY N)` 目標。
+
+系統本體(改行為才需要碰):`Enemy.Script`(DSL schema)、
+`Sim.EnemyCore`(純 AI 機 + 玩家攻擊 hitbox 表,`EnemyCoreSpec` 覆蓋)、
+`Sim.Enemy`(Apecs 膠水:生成/驅動/射彈)、`Sim.Damage`(統一傷害結算,
+物理之後跑;敵死發 `EvEnemyKilled`、玩家死發 `EvPlayerDied`)。
+遠程敵人用的就是 `Projectile` 元件與 `updateProjectiles`。
+新增「行動方式」= `Sim.EnemyCore` 加純轉換 + 測試 + schema 加欄位;
+先想「能不能只是新參數組合」再加新狀態。
 
 ### 3.5 新增一個按鍵/意圖
 
@@ -191,9 +212,35 @@
 
 事件驅動:訂閱的正確位置是 `Main` 中 `netEvents`/`netFrame` 回傳處——`GameEvent` 與 `GameMode` 轉換就是播放時機(死亡音、撿取音、換 BGM)。新增 `Audio.hs` 封裝 sdl2-mixer,由 `Main` 呼叫。**不要在模擬或 Reflex 裡播音效。**
 
-### 3.9 存檔系統(規劃好的路徑)
+### 3.9 改動存檔格式(migration 已建成)
 
-`RunStats`/進度的唯一真相在 `Flow.Machine`——序列化 `FlowState` 即可。寫檔時機由 `FlowCommand`(如 `CmdSaveGame`)觸發,`Main` 執行。建議 aeson(注意:與 GHC 9.14 的相容性需選 2.3+)。
+存檔 schema 要變更時(`Save.Codec`):
+
+1. `currentSaveVersion` +1。
+2. `migrations` 追加一步「版本 N 物件 → N+1 物件」(aeson Value 層級的純轉換)。
+3. `CodecSpec` 加一份手寫的舊版 JSON 文件測遷移。
+
+舊檔載入時自動逐步升級;只有「未來版本」會被拒絕。內容引用(任務/道具 id)
+過期則由 `sanitizeSave` 在載入時**明確**丟棄/夾緊並回報警告——絕不靜默指錯。
+關卡自 v2 起以「檔名」而非索引儲存,插入新關卡不會弄壞舊檔。
+
+### 3.10 新增一種 UI 字體
+
+字體是**程式層分類**(sum type,編譯器把關),不是內容層資料:
+
+1. `Core.Settings`:`FontChoice` 加建構子、`fontLabel` 給顯示名、
+   `formatSettings`/`parseSettings` 加對應鍵值(未知值回退 `FontPixel`)。
+   `toggleSetting` 的 FONT 列會自動循環新選項(`Enum`/`Bounded`)。
+2. 把 `.ttf` 放進 `assets/fonts/`(注意授權;見該目錄 README)。
+3. `Render.Font`:`Fonts` record 加欄位、`loadFonts` 載入(缺檔即啟動失敗)、
+   `drawText`/`textWidth` 的 case 加分支。
+4. `app/Main.hs`:`loadFonts` 傳入新路徑。
+5. `SettingsSpec` 的 roundtrip 測試以 `[minBound .. maxBound]` 枚舉,
+   新選項自動被覆蓋——跑 `cabal test` 確認。
+
+新增一個布林/多值設定列也走同樣的路:`Settings` 加欄位 →
+`settingsRows`/`toggleSetting`/parse/format → 需要副作用就在
+`Main.runCommand` 的 `CmdToggleSetting` 後套用(比照 `applyDisplaySettings`)。
 
 ---
 
@@ -205,13 +252,13 @@
 4. **為什麼換關卡是整個 world 重建?** Apecs 沒有「清空世界」;逐實體刪除必然漏。World 很便宜,重建 = 零殘留 bug。
 5. **為什麼關卡是外部文字檔?** 內容迭代不應碰編譯器。檔名排序即順序,讓「加關卡」成為零程式碼操作。
 6. **為什麼道具是 sum type 不是字串?** 加新道具時,編譯器的 pattern 警告就是你的待辦清單;字串比對則是靜默錯誤。
-7. **為什麼自製 3x5 字型?** 避免 sdl2-ttf 的原生依賴與字型檔資產,用 fillRect 拼字。幾何極簡美術方向下這就夠了。
+7. **為什麼字體是雙後端?** 預設是 SDL2_ttf 渲染的 Noto Sans TC(`assets/fonts/NotoSansTC.ttf`,拉丁+繁中全涵蓋);自製 3x5 像素字型保留為復古選項。兩個後端共用 `FontSet` 介面與版面度量,`textWidth` 因 TTF 需量測 shaped glyph 而是 IO。兩條硬規則:(a) **TTF 按繪製尺寸光柵化、1:1 blit**(每字級快取一個 font)——曾經用 48pt 大貼圖縮小繪製,細筆畫整條消失;(b) 像素字型只涵蓋 ASCII,**非 ASCII 字串自動回退 TTF**,切字型永遠不會讓文字消失。
 8. **邊界情況要 fail loudly**:關卡缺標記回 `Left`,不補預設值。半錯的狀態比崩潰更貴。
 
 ## 5. 已知的保留與待辦
 
-- `Projectile`/`updateProjectiles`/`projectileSpeed` 目前無生成者——**刻意保留**給遠程敵人(3.4)。
-- 尚無:敵人、HP/傷害、檢查點、存檔、音效、手把。皆有規劃路徑(見第 3 節與 GAME_DESIGN_REPORT.md 的里程碑 M2–M5)。
+- 尚無:檢查點、音效、手把。皆有規劃路徑(見第 3 節與 GAME_DESIGN_REPORT.md 的里程碑 M2–M5)。
+- 敵人/HP/傷害已建成(3.4);`Projectile` 現由遠程敵人生成。
 - **RPG 化七大系統**(主選單、任務 DSL、存讀檔、背包/裝備、七層視差、NPC DSL、HUD)的完整設計見 [SYSTEMS_DESIGN.md](SYSTEMS_DESIGN.md);其建造順序 S1–S9 與本文件的擴充指南互補,實作時兩者皆須遵守。注意其中一項原則演進:內容層道具將由 `ItemType` sum type 遷移為啟動期驗證的 `ItemId` registry(SYSTEMS_DESIGN.md §2.1 有完整論證)。
 - `cabal.project` 用 `allow-newer` 放寬 reflex 生態對 base-4.22/template-haskell-2.24 的上限(GHC 9.14);若升級 reflex 後可移除。
 - 行為修正紀錄:重構時修了「衝刺無視冷卻」——`StateIdle` 的 `dashCooldown` 原本只倒數不把關,現在雙擊在冷卻中不觸發衝刺(有測試鎖定)。

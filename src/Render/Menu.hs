@@ -42,9 +42,9 @@ textLit = V4 200 215 235 255
 textHi  = V4 255 230 120 255
 
 -- | Draw the whole menu for the current cursor position.
-renderMenu :: SDL.Renderer -> ItemRegistry -> Tilemap -> MenuCursor -> MenuEnv
+renderMenu :: FontSet -> ItemRegistry -> Tilemap -> MenuCursor -> MenuEnv
            -> RunStats -> Int -> [QuestDef] -> QuestLog -> Game ()
-renderMenu renderer registry tilemap cursor env stats levelIx questDefs qlog = do
+renderMenu fonts registry tilemap cursor env stats levelIx questDefs qlog = do
   vitalsList <- cfold (\acc (Player, v :: Vitals) -> v : acc) []
   playerPosL <- cfold (\acc (Player, Position p) -> p : acc) []
   goalPosL   <- cfold (\acc (Goal, Position p) -> p : acc) []
@@ -57,10 +57,10 @@ renderMenu renderer registry tilemap cursor env stats levelIx questDefs qlog = d
     forM_ (zip [0 :: Int ..] menuPages) $ \(i, page) -> do
       let x = 74.0 + fromIntegral i * 84.0
           color = if page == mcPage cursor then textHi else textDim
-      drawText renderer color 2.0 (V2 x 58.0) (menuPageTitle page)
-      when (page == mcPage cursor) $
-        drawPanel renderer (V2 x 74.0) (V2 (textWidth 2.0 (menuPageTitle page)) 2.0)
-          textHi textHi
+      drawText fonts color 2.0 (V2 x 58.0) (menuPageTitle page)
+      when (page == mcPage cursor) $ do
+        w <- textWidth fonts 2.0 (menuPageTitle page)
+        drawPanel renderer (V2 x 74.0) (V2 w 2.0) textHi textHi
 
     case mcPage cursor of
       PageStatus   -> drawStatus vitalsList
@@ -72,23 +72,31 @@ renderMenu renderer registry tilemap cursor env stats levelIx questDefs qlog = d
       PageLoad     -> drawSlots "LOAD FROM:" (("AUTO", meAutoSave env) : manualSlotRows)
       PageSettings -> drawSettingsPage
 
-    drawText renderer textDim 1.5 (V2 contentX 530.0)
+    drawText fonts textDim 1.5 (V2 contentX 530.0)
       "ARROWS: NAVIGATE   SPACE: CONFIRM   ESC: CLOSE"
   where
-    centeredIn y color scale str =
-      drawText renderer color scale
-        (V2 ((screenWidth - textWidth scale str) / 2.0) y) str
+    renderer = fsRenderer fonts
+
+    centeredIn y color scale str = do
+      w <- textWidth fonts scale str
+      drawText fonts color scale (V2 ((screenWidth - w) / 2.0) y) str
 
     row i = V2 contentX (contentY + fromIntegral (i :: Int) * rowH)
 
-    cursorAt i target = when (mcRow cursor == i && mcPage cursor == target) $
-      drawText renderer textHi 2.0 (V2 (contentX - 16.0) (contentY + fromIntegral i * rowH)) ">"
+    -- The selected row gets a full-width highlight bar plus the ">" marker,
+    -- so the cursor is obvious at a glance. Pages call this BEFORE drawing
+    -- the row's text, so the bar sits underneath.
+    cursorAt i target = when (mcRow cursor == i && mcPage cursor == target) $ do
+      let y = contentY + fromIntegral i * rowH
+      drawPanel renderer (V2 (contentX - 26.0) (y - 6.0)) (V2 656.0 26.0)
+        (V4 52 68 100 160) (V4 255 230 120 220)
+      drawText fonts textHi 2.0 (V2 (contentX - 18.0) y) ">"
 
     drawStatus vitalsList = do
       let v = case vitalsList of
                 (x : _) -> x
                 []      -> fullVitals playerMaxHp playerMaxMp playerMaxStamina
-          line i = drawText renderer textLit 2.0 (row i)
+          line i = drawText fonts textLit 2.0 (row i)
       line 0 (printf "HP      %3.0f / %3.0f" (vHp v) (vMaxHp v))
       line 1 (printf "MP      %3.0f / %3.0f" (vMp v) (vMaxMp v))
       line 2 (printf "STAMINA %3.0f / %3.0f" (vStamina v) (vMaxStamina v))
@@ -107,15 +115,15 @@ renderMenu renderer registry tilemap cursor env stats levelIx questDefs qlog = d
                 (fill, border) = itemColors registry iid
             drawPanel renderer (V2 x y) (V2 14.0 14.0)
               (fromIntegral <$> fill) (fromIntegral <$> border)
-            drawText renderer textLit 2.0 (V2 (x + 26.0) y)
+            drawText fonts textLit 2.0 (V2 (x + 26.0) y)
               (T.unpack (itemDisplayName registry iid))
-            drawText renderer textDim 2.0 (V2 (x + 300.0) y) ("X" <> show count)
-            drawText renderer textDim 2.0 (V2 (x + 380.0) y) (categoryTag cat)
+            drawText fonts textDim 2.0 (V2 (x + 300.0) y) ("X" <> show count)
+            drawText fonts textDim 2.0 (V2 (x + 380.0) y) (categoryTag cat)
           -- Description of the selected item.
           case drop (mcRow cursor) (meBackpack env) of
             ((iid, _, _) : _) ->
               case lookupItem registry iid of
-                Just def -> drawText renderer textDim 1.5 (V2 contentX 490.0)
+                Just def -> drawText fonts textDim 1.5 (V2 contentX 490.0)
                               (T.unpack (defDesc def))
                 Nothing  -> return ()
             [] -> return ()
@@ -124,11 +132,11 @@ renderMenu renderer registry tilemap cursor env stats levelIx questDefs qlog = d
       forM_ (zip [0 :: Int ..] (meEquipped env)) $ \(i, (slot, mItem)) -> do
         cursorAt i PageEquip
         let V2 x y = row i
-        drawText renderer textDim 2.0 (V2 x y) (slotName slot)
+        drawText fonts textDim 2.0 (V2 x y) (slotName slot)
         case mItem of
-          Just iid -> drawText renderer textLit 2.0 (V2 (x + 140.0) y)
+          Just iid -> drawText fonts textLit 2.0 (V2 (x + 140.0) y)
                         (T.unpack (itemDisplayName registry iid))
-          Nothing  -> drawText renderer (V4 70 85 110 255) 2.0 (V2 (x + 140.0) y) "-"
+          Nothing  -> drawText fonts (V4 70 85 110 255) 2.0 (V2 (x + 140.0) y) "-"
 
     drawQuestsPage
       | null questDefs = centeredIn 260.0 textDim 2.5 "NO QUESTS"
@@ -144,10 +152,10 @@ renderMenu renderer registry tilemap cursor env stats levelIx questDefs qlog = d
                 goal = case drop (qpStage prog) (qdStages qd) of
                   (st : _) | qpPhase prog == QActive -> T.unpack (qsGoal st)
                   _ -> ""
-            drawText renderer textLit 2.0 (V2 x y) (T.unpack (qdName qd))
-            drawText renderer tagColor 2.0 (V2 (x + 340.0) y) tag
+            drawText fonts textLit 2.0 (V2 x y) (T.unpack (qdName qd))
+            drawText fonts tagColor 2.0 (V2 (x + 340.0) y) tag
             when (goal /= "") $
-              drawText renderer textDim 1.5 (V2 (x + 12.0) (y + 16.0)) goal
+              drawText fonts textDim 1.5 (V2 (x + 12.0) (y + 16.0)) goal
 
     drawMapPage = \pps gps -> do
       let availW = 640.0
@@ -175,20 +183,20 @@ renderMenu renderer registry tilemap cursor env stats levelIx questDefs qlog = d
       ]
 
     drawSlots title slotList = do
-      drawText renderer textDim 2.0 (V2 contentX (contentY - 34.0)) title
+      drawText fonts textDim 2.0 (V2 contentX (contentY - 34.0)) title
       forM_ (zip [0 :: Int ..] slotList) $ \(i, (label, mSummary)) -> do
         cursorAt i (mcPage cursor)
         let V2 x y = row i
-        drawText renderer textLit 2.0 (V2 x y)
+        drawText fonts textLit 2.0 (V2 x y)
           (label <> "  " <> maybe "EMPTY" id mSummary)
 
     drawSettingsPage =
       forM_ (zip [0 :: Int ..] (meSettings env)) $ \(i, (label, value)) -> do
         cursorAt i PageSettings
         let V2 x y = row i
-        drawText renderer textLit 2.0 (V2 x y) label
-        drawText renderer (if value then textHi else textDim) 2.0 (V2 (x + 260.0) y)
-          (if value then "ON" else "OFF")
+        drawText fonts textLit 2.0 (V2 x y) label
+        drawText fonts (if value == "OFF" then textDim else textHi) 2.0
+          (V2 (x + 260.0) y) value
 
     slotName slot = case slot of
       SlotWeapon -> "WEAPON"

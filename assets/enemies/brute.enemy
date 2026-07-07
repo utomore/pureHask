@@ -1,0 +1,15 @@
+;; 巨衛:守在深淵之門前的重型敵人。
+;; 用完整的 (behavior-tree …) 定義:由上而下,第一條成立的規則獲勝——
+;; 血量低於 35% 時逃跑;玩家靠近就追擊;否則巡邏。
+
+(enemy brute
+  (name enemy.brute.name)
+  (color 220 100 70)
+  (size 34 40)
+  (stats (hp 90) (damage 22) (speed 80))
+  (behavior-tree
+    (select
+      (sequence (hp-below 0.35) (flee 130))
+      (sequence (player-within 220) (chase 80))
+      (patrol 2 40)))
+  (spawn-at 05-abyssgate 50 12))

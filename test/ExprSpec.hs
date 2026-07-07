@@ -19,7 +19,7 @@ cond src = case parseSexps (T.pack src) of
 
 action :: String -> Either String Action
 action src = case parseSexps (T.pack src) of
-  Right [form] -> compileAction form
+  Right [form] -> compileAction M.empty form
   other        -> Left ("bad test source " <> show other)
 
 env :: ScriptEnv

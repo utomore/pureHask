@@ -1,6 +1,7 @@
 module RegistrySpec (spec) where
 
 import Data.List (isInfixOf)
+import qualified Data.Map.Strict as M
 import qualified Data.Text as T
 import Test.Hspec
 
@@ -60,7 +61,7 @@ spec = do
       requireItem reg "lvl" (ItemId "x") `shouldSatisfy` isRight
       requireItem reg "lvl" (ItemId "y") `shouldSatisfy` failsWith "lvl: unknown item id 'y'"
   where
-    compile src = parseSexps (T.pack src) >>= compileRegistry
+    compile src = parseSexps (T.pack src) >>= compileRegistry M.empty
     failsWith needle r = case r of
       Left err -> needle `isInfixOf` err
       Right _  -> False

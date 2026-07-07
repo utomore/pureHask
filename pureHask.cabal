@@ -27,10 +27,13 @@ library
     exposed-modules:
         Core.Components
         Core.Config
+        Core.Lang
         Core.Settings
         Core.Types
+        Enemy.Script
         Flow.Machine
         FRP.Network
+        Game.Assets
         Game.Logic
         Hud.Machine
         Input.Semantics
@@ -48,12 +51,18 @@ library
         Render.Widgets
         Save.Codec
         Script.Expr
+        Script.Inherit
         Script.Sexp
         Sim.Combat
         Sim.CombatCore
+        Sim.Damage
+        Sim.Enemy
+        Sim.EnemyCore
         Sim.EquipCore
         Sim.Items
         Sim.Npc
+        Sim.ParticleCore
+        Sim.Particles
         Sim.Physics
         Sim.Rules
         Sim.Spawn
@@ -73,6 +82,7 @@ library
         mtl,
         reflex >= 0.8,
         sdl2 >= 2.5,
+        sdl2-ttf >= 2.1,
         text,
         transformers,
         vector >= 0.12
@@ -86,10 +96,13 @@ executable pureHask
         base,
         apecs,
         containers,
+        directory,
+        filepath,
         linear,
         pureHask,
         sdl2,
-        text
+        text,
+        time
 
 test-suite pureHask-test
     import:           shared
@@ -99,17 +112,22 @@ test-suite pureHask-test
     other-modules:
         CodecSpec
         CombatCoreSpec
+        EnemyCoreSpec
         EquipCoreSpec
         ExprSpec
         FlowSpec
         HudSpec
+        InheritSpec
         ItemsSpec
+        LangSpec
         LevelSpec
         NpcSpec
+        ParticleSpec
         QuestSpec
         RegistrySpec
         SceneSpec
         SemanticsSpec
+        SettingsSpec
         SexpSpec
         TilemapSpec
     build-depends:
