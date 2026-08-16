@@ -64,6 +64,8 @@ data Action
   | ACompleteQuest !QuestId
   | ASpawnNpc !NpcId !Double !Double  -- ^ tile coordinates
   | ADespawnNpc !NpcId
+  | AGiveTalentPoints !Int            -- ^ grant unspent talent points
+  | ARespecTalents                    -- ^ refund all learned talents (shrine)
   deriving (Eq, Show)
 
 -- | The read-only world snapshot conditions are evaluated against.
@@ -138,6 +140,9 @@ compileAction table form = case form of
   SList [SSym "spawn-npc", SSym n, SNum x, SNum y] ->
     Right (ASpawnNpc (NpcId n) x y)
   SList [SSym "despawn-npc", SSym n] -> Right (ADespawnNpc (NpcId n))
+  SList [SSym "give-talent-points", SNum n] | n >= 1 ->
+    Right (AGiveTalentPoints (round n))
+  SList [SSym "respec-talents"] -> Right ARespecTalents
   _ -> Left ("unknown action " <> show form)
 
 --------------------------------------------------------------------------------

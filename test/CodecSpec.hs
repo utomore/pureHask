@@ -17,12 +17,14 @@ sampleSave :: SaveGame
 sampleSave = SaveGame
   { svVersion = currentSaveVersion
   , svLevel   = 1
-  , svStats   = RunStats 3 5 754.2
+  , svStats   = RunStats 3 5 12 754.2
   , svPlayer  = PlayerPersist
       { ppBackpack = M.fromList [(ItemId "gold-key", 1), (ItemId "potion-hp-s", 4)]
       , ppEquipped = M.fromList [(SlotWeapon, ItemId "sword-rusty")]
       , ppVitals   = Vitals 62 100 50 50 80 100
-      , ppStats    = DerivedStats 5 1 1.15
+      , ppStats    = DerivedStats 5 1 1.15 25 0
+      , ppTalents  = TalentState 2
+          (M.fromList [(TalentId "blade-touch", 2), (TalentId "bulwark-heart", 1)])
       }
   , svQuests  = QuestLog
       (M.fromList [ (QuestId "find-key", QuestProgress QActive 1 0)
@@ -44,6 +46,19 @@ v1Document = BL8.pack $ concat
   , "\"quests\":{\"flags\":[],\"progress\":{}}}"
   ]
 
+-- | A hand-written VERSION 2 save document (pre-talents), as the previous
+--   release wrote it.
+v2Document :: BL8.ByteString
+v2Document = BL8.pack $ concat
+  [ "{\"version\":2,\"levelName\":\"02-ascent\","
+  , "\"stats\":{\"deaths\":3,\"items\":5,\"time\":754.2},"
+  , "\"player\":{\"backpack\":{\"gold-key\":1},\"equipped\":{},"
+  , "\"vitals\":{\"hp\":62,\"maxHp\":100,\"mp\":50,\"maxMp\":50,"
+  , "\"stamina\":80,\"maxStamina\":100},"
+  , "\"derived\":{\"atk\":0,\"def\":0,\"speedMult\":1}},"
+  , "\"quests\":{\"flags\":[],\"progress\":{}}}"
+  ]
+
 spec :: Spec
 spec = do
   describe "encode/decode (v2)" $ do
@@ -53,7 +68,7 @@ spec = do
     it "roundtrips an empty-handed player" $ do
       let bare = sampleSave
             { svPlayer = PlayerPersist M.empty M.empty
-                           (fullVitals 100 50 100) baseStats
+                           (fullVitals 100 50 100) baseStats emptyTalentState
             , svQuests = emptyQuestLog
             }
       decodeSave env (encodeSave env bare) `shouldBe` Right bare
@@ -89,13 +104,13 @@ spec = do
         Left _  -> True
         Right _ -> False
 
-  describe "migration v1 -> v2" $ do
+  describe "migration v1 -> v2 -> v3" $ do
     it "upgrades a v1 document (index becomes the level name)" $ do
       case decodeSave env v1Document of
         Right sv -> do
           svVersion sv `shouldBe` currentSaveVersion
           svLevel sv `shouldBe` 1
-          svStats sv `shouldBe` RunStats 3 5 754.2
+          svStats sv `shouldBe` RunStats 3 5 0 754.2
         Left err -> expectationFailure err
 
     it "a v1 index out of range is a loud error, not the wrong level" $ do
@@ -104,31 +119,64 @@ spec = do
         Left err -> "out of range" `isInfixOf` err
         Right _  -> False
 
+    it "upgrades a v2 document (talents arrive empty, kills at zero)" $ do
+      case decodeSave env v2Document of
+        Right sv -> do
+          svVersion sv `shouldBe` currentSaveVersion
+          svLevel sv `shouldBe` 1
+          statKills (svStats sv) `shouldBe` 0
+          ppTalents (svPlayer sv) `shouldBe` emptyTalentState
+          dsMaxHp (ppStats (svPlayer sv)) `shouldBe` 0
+        Left err -> expectationFailure err
+
   describe "sanitizeSave" $ do
     let knownQuests = [(QuestId "find-key", 2), (QuestId "done-one", 3)]
         knownItems = [ItemId "gold-key", ItemId "potion-hp-s", ItemId "sword-rusty"]
+        knownTalents = [ (TalentId "blade-touch", 3, 1)
+                       , (TalentId "bulwark-heart", 2, 2) ]
 
     it "a clean save passes through untouched" $
-      sanitizeSave knownQuests knownItems sampleSave
+      sanitizeSave knownQuests knownItems knownTalents sampleSave
         `shouldBe` (sampleSave, [])
 
     it "drops quests that no longer exist, with a warning" $ do
-      let (sv, warns) = sanitizeSave [(QuestId "done-one", 3)] knownItems sampleSave
+      let (sv, warns) =
+            sanitizeSave [(QuestId "done-one", 3)] knownItems knownTalents sampleSave
       M.member (QuestId "find-key") (qlQuests (svQuests sv)) `shouldBe` False
       warns `shouldSatisfy` any ("find-key" `isInfixOf`)
 
     it "clamps a stage index past the quest's stage count" $ do
       let shrunkQuests = [(QuestId "find-key", 1), (QuestId "done-one", 3)]
-          (sv, warns) = sanitizeSave shrunkQuests knownItems sampleSave
+          (sv, warns) =
+            sanitizeSave shrunkQuests knownItems knownTalents sampleSave
       qpStage (qlQuests (svQuests sv) M.! QuestId "find-key") `shouldBe` 0
       warns `shouldSatisfy` any ("clamped" `isInfixOf`)
 
     it "drops unknown backpack items and unequips unknown gear" $ do
       let fewItems = [ItemId "gold-key"]
-          (sv, warns) = sanitizeSave knownQuests fewItems sampleSave
+          (sv, warns) = sanitizeSave knownQuests fewItems knownTalents sampleSave
       M.member (ItemId "potion-hp-s") (ppBackpack (svPlayer sv)) `shouldBe` False
       M.member SlotWeapon (ppEquipped (svPlayer sv)) `shouldBe` False
       length warns `shouldBe` 2
+
+    it "refunds ranks in talents that no longer exist" $ do
+      let fewTalents = [(TalentId "bulwark-heart", 2, 2)]
+          (sv, warns) = sanitizeSave knownQuests knownItems fewTalents sampleSave
+          ts = ppTalents (svPlayer sv)
+      M.member (TalentId "blade-touch") (tsRanks ts) `shouldBe` False
+      -- 2 unspent + 2 ranks refunded at one point each
+      tsPoints ts `shouldBe` 4
+      warns `shouldSatisfy` any ("blade-touch" `isInfixOf`)
+
+    it "clamps a rank above the talent's max, refunding the difference" $ do
+      let shrunk = [ (TalentId "blade-touch", 1, 1)
+                   , (TalentId "bulwark-heart", 2, 2) ]
+          (sv, warns) = sanitizeSave knownQuests knownItems shrunk sampleSave
+          ts = ppTalents (svPlayer sv)
+      tsRanks ts M.! TalentId "blade-touch" `shouldBe` 1
+      -- 2 unspent + 1 excess rank refunded at cost 1
+      tsPoints ts `shouldBe` 3
+      warns `shouldSatisfy` any ("clamped rank" `isInfixOf`)
 
   describe "slotSummary" $
     it "shows level and play time" $

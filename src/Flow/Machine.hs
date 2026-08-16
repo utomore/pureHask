@@ -60,6 +60,7 @@ menuRowCount env page = case page of
   PageStatus   -> 0
   PageBackpack -> length (meBackpack env)
   PageEquip    -> length (meEquipped env)
+  PageTalents  -> length (meTalents env)
   PageQuests   -> 0
   PageMap      -> 0
   PageSave     -> length (meSaveSlots env)
@@ -136,6 +137,9 @@ stepFlow (FlowEvents evs) fs = (foldl react fs evs, [])
       (_, EvItemPicked _) ->
         let stats = fsStats s
         in s { fsStats = stats { statItems = statItems stats + 1 } }
+      (_, EvEnemyKilled _) ->
+        let stats = fsStats s
+        in s { fsStats = stats { statKills = statKills stats + 1 } }
       -- A save was loaded by the shell: adopt its progress and play. (The
       -- quest log part is consumed by "Quest.Runtime".)
       (_, EvRunRestored level stats _qlog) ->
@@ -185,6 +189,12 @@ stepMenu intents env fs
       PageEquip ->
         case drop (mcRow cursor) (meEquipped env) of
           ((slot, Just _) : _) -> (fs, [CmdUnequip slot])
+          _                    -> (fs, [])
+      -- Only rows the pure rules say are buyable emit a command; the shell
+      -- re-checks against the world before spending anything.
+      PageTalents ->
+        case drop (mcRow cursor) (meTalents env) of
+          ((tid, _, True) : _) -> (fs, [CmdLearnTalent tid])
           _                    -> (fs, [])
       PageSettings ->
         if mcRow cursor < length (meSettings env)

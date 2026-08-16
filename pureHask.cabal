@@ -25,6 +25,8 @@ library
     import:           shared
     hs-source-dirs:   src
     exposed-modules:
+        Audio.Player
+        Audio.Script
         Core.Components
         Core.Config
         Core.Lang
@@ -47,6 +49,7 @@ library
         Render.Hud
         Render.Layers
         Render.Menu
+        Render.Sprites
         Render.UI
         Render.Widgets
         Save.Codec
@@ -66,6 +69,10 @@ library
         Sim.Physics
         Sim.Rules
         Sim.Spawn
+        Sprite.Core
+        Sprite.Script
+        Talent.Core
+        Talent.Script
         World.Level
         World.Scene
         World.Tilemap
@@ -82,6 +89,7 @@ library
         mtl,
         reflex >= 0.8,
         sdl2 >= 2.5,
+        sdl2-mixer >= 1.2,
         sdl2-ttf >= 2.1,
         text,
         transformers,
@@ -110,6 +118,7 @@ test-suite pureHask-test
     main-is:          Spec.hs
     hs-source-dirs:   test
     other-modules:
+        AudioSpec
         CodecSpec
         CombatCoreSpec
         EnemyCoreSpec
@@ -129,6 +138,8 @@ test-suite pureHask-test
         SemanticsSpec
         SettingsSpec
         SexpSpec
+        SpriteSpec
+        TalentSpec
         TilemapSpec
     build-depends:
         base,

@@ -31,6 +31,10 @@ sampleEnv = MenuEnv
                   ]
   , meEquipped  = (SlotWeapon, Just (ItemId "sword-old"))
                     : [ (slot, Nothing) | slot <- [SlotBody ..] ]
+  , meTalents   = [ (TalentId "blade-touch", 0, True)
+                  , (TalentId "blade-edge", 0, False)
+                  ]
+  , meTalentPts = 3
   , meSaveSlots = [Just "LV 1  00:30", Nothing, Nothing]
   , meAutoSave  = Just "LV 2  10:00"
   , meSettings  = [("SHOW FPS", "OFF"), ("FULLSCREEN", "OFF"), ("FONT", "PIXEL"), ("LANGUAGE", "EN")]
@@ -45,7 +49,7 @@ spec = do
       cmds `shouldBe` [CmdNewGame]
 
     it "starting a run resets the stats" $ do
-      let dirty = start { fsStats = RunStats 5 3 99.0 }
+      let dirty = start { fsStats = RunStats 5 3 8 99.0 }
           (fs, _) = stepFlow (frame 0.016 [IntentJump]) dirty
       fsStats fs `shouldBe` emptyRunStats
 
@@ -139,7 +143,7 @@ spec = do
       cmds2 `shouldBe` []
 
     it "a restored run adopts the saved level and stats" $ do
-      let saved = RunStats 9 9 300.0
+      let saved = RunStats 9 9 21 300.0
           (fs, _) = stepFlow (FlowEvents [EvRunRestored 1 saved emptyQuestLog]) inMenu
       fsMode fs `shouldBe` ModePlaying
       fsLevel fs `shouldBe` 1

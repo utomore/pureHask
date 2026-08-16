@@ -30,6 +30,9 @@
 7. [共用條件/動作詞彙表](#7-共用條件動作詞彙表)
 8. [視差佈景 `assets/scenes/*.scene`](#8-視差佈景)
 9. [常見錯誤與排查](#9-常見錯誤與排查)
+10. [天賦樹 `assets/talents/talents.def`](#10-天賦樹)
+11. [音效與音樂 `assets/audio/`](#11-音效與音樂)
+12. [Sprite Sheet 動畫 `assets/sprites/` + `assets/textures/`](#12-sprite-sheet-動畫)
 
 ---
 
@@ -336,6 +339,8 @@ NPC 對話規則與任務 on-complete 共用同一套詞彙(`Script.Expr`)。
 | `(offer-quest Q)` | 啟動一個尚未開始的任務 |
 | `(advance-quest Q)` / `(complete-quest Q)` | 推進/完成任務 |
 | `(spawn-npc NPC 磚x 磚y)` / `(despawn-npc NPC)` | 生成/移除 NPC |
+| `(give-talent-points N)` | 給 N 點天賦點(任務獎勵常用,見 §10) |
+| `(respec-talents)` | 全額退還已花費的天賦點(放在 NPC 對話 = 重洗地點) |
 
 ---
 
@@ -390,3 +395,112 @@ NPC 對話規則與任務 on-complete 共用同一套詞彙(`Script.Expr`)。
 - 中文由 TTF 字體(預設)顯示;就算在設定切回 `PIXEL (ASCII)` 像素
   字型,含非 ASCII 字元的字串也會**自動回退 TTF**,文字不會消失
   (像素字型只涵蓋 A-Z/0-9,純英文字串才用它)。
+
+---
+
+## 10. 天賦樹
+
+檔案:`assets/talents/talents.def`(單一檔;檔案順序 = 選單 TALENT 頁顯示順序)。
+
+```lisp
+(talent blade-touch
+  (name talent.blade-touch.name)   ; 顯示名(lang key 或字串)
+  (desc talent.blade-touch.desc)   ; 選單底部說明
+  (max-rank 3)                     ; 可買幾階(省略 = 1)
+  (cost 1)                         ; 每階幾點(省略 = 1)
+  (effect (atk 2)))                ; 每階疊加的效果,至少一項
+
+(talent blade-edge
+  (name talent.blade-edge.name)
+  (requires blade-touch 2)         ; 需要「較早定義」的節點達 2 階
+  (max-rank 2) (cost 2)
+  (effect (atk 4) (spd 5)))
+```
+
+**效果詞彙**(打錯 = 啟動失敗):`(atk N)`、`(def N)`、`(spd N)`(移速 +N%)、
+`(max-hp N)`、`(max-stamina N)`。
+
+**規則**:
+
+- `(requires 節點 [階數])` 只能引用**檔案中較早定義**的節點(省略階數 = 1)。
+  前向引用是錯誤——這一條讓天賦圖天生無環。
+- 天賦加成是屬性的**底層**,裝備疊在上面;`max-hp`/`max-stamina` 會即時
+  調整血條/耐力上限。
+
+**天賦點怎麼來**(`Core.Config` 可調):
+
+| 來源 | 預設 |
+|---|---|
+| 擊殺里程碑 | 每 5 殺 +1(`talentKillsPerPoint`) |
+| 過關 | 每關 +1(`talentPointsPerClear`) |
+| 腳本 `(give-talent-points N)` | 任務獎勵/NPC 對話,見 §7 |
+
+**重洗(到指定地點重新配點)**:把 `(respec-talents)` 放進某個 NPC 的對話,
+那個 NPC 站的地方就是重洗點——全額退還花費的點數,再去選單重配。
+現成範例 `assets/npcs/echo-shrine.npc`(關卡 03 的「回聲石碑」):
+
+```lisp
+(dialogue
+  (default
+    (say echo-shrine npc.echo-shrine.respec.1)
+    (respec-talents)
+    (toast npc.echo-shrine.toast)))
+```
+
+---
+
+## 11. 音效與音樂
+
+檔案:`assets/audio/audio.def` + 音檔放 `assets/audio/sfx/`、`assets/audio/music/`
+(路徑寫相對於 `assets/audio/`;WAV 最穩)。**聲音是事件驅動的**:模擬發生
+什麼(撿到道具、敵人死亡),就播綁定的音;遊戲邏輯完全不知道音訊存在。
+
+```lisp
+(sfx pickup (file sfx/pickup.wav) (volume 96))   ; volume 0-128,省略 = 96
+(music cave (file music/cave.wav) (volume 48))
+
+(on-event item-picked pickup)        ; 事件 → 音效
+(music-for-mode title title-theme)   ; 模式 → 音樂
+(music-for-mode playing overworld)
+(music-for-level 03-hollow cave)     ; 玩這關時蓋過 playing 的綁定
+```
+
+**可綁的事件名**(固定詞彙,綁錯啟動失敗):
+`player-died`、`goal-reached`、`item-picked`、`item-used`、`equip-changed`、
+`talked-to`、`enemy-killed`、`talent-learned`、`talents-respec`。
+
+**可綁的模式名**:`title`、`playing`、`menu`、`dialogue`、`dead`、
+`level-complete`、`ending`。**沒綁的模式維持現在的音樂**——這是特性:
+開選單/進對話不會重播關卡曲。音樂全部循環播放、切換帶 0.35 秒淡入。
+
+沒有 `audio.def` = 整個遊戲靜音運行;沒有音訊裝置的機器也會自動靜音,
+不影響遊戲。目前的 wav 都是合成佔位音,**直接覆蓋同名檔即可換音**(熱重載)。
+
+---
+
+## 12. Sprite Sheet 動畫
+
+兩個目錄:圖放 `assets/textures/*.bmp`,定義放 `assets/sprites/*.sprite`。
+
+```lisp
+(sprite player
+  (sheet player.bmp)          ; assets/textures/ 下的檔名
+  (frame-size 24 24)          ; 網格一格的像素大小
+  (color-key 255 0 255)       ; 選填:這個顏色視為透明(慣用洋紅)
+  (anim idle (row 0) (frames 2) (fps 3))
+  (anim run  (row 1) (frames 4) (fps 10)))
+```
+
+- 一個 `(anim …)` = 讀網格**同一列**、由左至右 `frames` 格、每秒 `fps` 格、循環。
+  `row`/`frames`/`fps` 都可省略(0 / 1 / 8)。
+- **誰用這張圖看 sprite 的名字**(命名慣例,不用改任何檔):
+  `player` = 玩家、`npc-elder` = NPC elder、`enemy-slime` = 敵人 slime。
+  沒有 sheet 的實體維持現在的色塊,美術可以一張一張慢慢換。
+- 動畫名有 fallback:玩家會依序找 `dash`/`attack`/`charge`/`thrust`/`plunge`/
+  `hook`/`jump`/`run`/`idle`——sheet 只有一列 `idle` 也能動;NPC/敵人找
+  `run`→`walk`→`idle`。面向用水平鏡射,畫面朝右畫即可。
+- 圖用 **BMP**(SDL 內建支援,免裝新函式庫)。用 Aseprite/GIMP/PS 匯出
+  sprite sheet 後另存 BMP,或任何工具 PNG→BMP;透明用洋紅色 color-key
+  最穩(32 位元 BMP 的 alpha 不一定被讀)。
+- 啟動與 `--validate` 會直接讀 BMP 表頭驗證:格數超出圖的寬高、檔案不存在、
+  上下顛倒(top-down)的 BMP 都會被抓出來。`.sprite` 與 `.bmp` 都支援熱重載。

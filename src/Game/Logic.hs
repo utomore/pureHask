@@ -13,7 +13,9 @@ module Game.Logic
 
 import qualified Data.Map.Strict as M
 import Data.Text (Text)
+import qualified Data.Text as T
 
+import Core.Config (talentPointsPerClear)
 import Core.Types
 import Flow.Machine
 import Hud.Machine
@@ -22,6 +24,7 @@ import Npc.Script (NpcDef, ndName)
 import Quest.Runtime
 import Quest.Script (QuestDef)
 import Script.Expr
+import Talent.Core (killPointsBetween)
 
 data LogicState = LogicState
   { lsFlow   :: !FlowState
@@ -72,12 +75,27 @@ stepLogic qtext questDefs npcDefs flowIn ls = case flowIn of
     let (flow', cmds) = stepFlow flowIn (lsFlow ls)
         QuestOut qlog wcmds toasts = stepQuests qtext questDefs evs (lsQuests ls)
 
+        -- Talent points from progression: kill milestones (folded into
+        -- 'statKills' by the flow machine above) and level clears. A restored
+        -- save skips this — its points are already banked in the save file.
+        restored = not (null [ () | EvRunRestored {} <- evs ])
+        talentPts
+          | restored  = 0
+          | otherwise =
+              killPointsBetween (statKills (fsStats (lsFlow ls)))
+                                (statKills (fsStats flow'))
+              + talentPointsPerClear * length [ () | EvGoalReached <- evs ]
+        talentCmds   = [ WcGiveTalentPoints talentPts | talentPts > 0 ]
+        talentToasts =
+          [ qtTalentGained qtext <> " +" <> T.pack (show talentPts)
+          | talentPts > 0 ]
+
         -- NPC conversations: evaluate the dialogue script of every talked-to
         -- NPC against the current snapshot.
         env = scriptEnvOf ls { lsQuests = qlog }
         talked = [ def | EvTalkedTo nid <- evs, Just def <- [M.lookup nid npcDefs] ]
         (dlgLines, qlog', wcmds', toasts') =
-          foldl (runDialogue env) ([], qlog, wcmds, toasts) talked
+          foldl (runDialogue env) ([], qlog, wcmds <> talentCmds, toasts <> talentToasts) talked
 
         hud' = pushToasts toasts' (lsHud ls)
         flow'' = openDialogue dlgLines flow'

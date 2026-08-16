@@ -21,6 +21,7 @@ import Quest.Script (QuestDef(..), QuestStage(..))
 import Render.Draw (toSDLRect, itemColors)
 import Render.Font
 import Render.Widgets
+import Talent.Script (TalentDef(..))
 import World.Tilemap
 
 panelPos :: V2 Double
@@ -42,10 +43,11 @@ textLit = V4 200 215 235 255
 textHi  = V4 255 230 120 255
 
 -- | Draw the whole menu for the current cursor position.
-renderMenu :: FontSet -> ItemRegistry -> Tilemap -> MenuCursor -> MenuEnv
-           -> RunStats -> Int -> [QuestDef] -> QuestLog -> Game ()
-renderMenu fonts registry tilemap cursor env stats levelIx questDefs qlog = do
+renderMenu :: FontSet -> ItemRegistry -> [TalentDef] -> Tilemap -> MenuCursor
+           -> MenuEnv -> RunStats -> Int -> [QuestDef] -> QuestLog -> Game ()
+renderMenu fonts registry talentDefs tilemap cursor env stats levelIx questDefs qlog = do
   vitalsList <- cfold (\acc (Player, v :: Vitals) -> v : acc) []
+  statsList  <- cfold (\acc (Player, StatsCache d) -> d : acc) []
   playerPosL <- cfold (\acc (Player, Position p) -> p : acc) []
   goalPosL   <- cfold (\acc (Goal, Position p) -> p : acc) []
 
@@ -55,7 +57,7 @@ renderMenu fonts registry tilemap cursor env stats levelIx questDefs qlog = do
     drawPanel renderer panelPos panelSize (V4 16 22 36 245) (V4 58 74 102 255)
 
     forM_ (zip [0 :: Int ..] menuPages) $ \(i, page) -> do
-      let x = 74.0 + fromIntegral i * 84.0
+      let x = 74.0 + fromIntegral i * 76.0
           color = if page == mcPage cursor then textHi else textDim
       drawText fonts color 2.0 (V2 x 58.0) (menuPageTitle page)
       when (page == mcPage cursor) $ do
@@ -63,9 +65,10 @@ renderMenu fonts registry tilemap cursor env stats levelIx questDefs qlog = do
         drawPanel renderer (V2 x 74.0) (V2 w 2.0) textHi textHi
 
     case mcPage cursor of
-      PageStatus   -> drawStatus vitalsList
+      PageStatus   -> drawStatus vitalsList statsList
       PageBackpack -> drawBackpackPage
       PageEquip    -> drawEquipPage
+      PageTalents  -> drawTalentsPage
       PageQuests   -> drawQuestsPage
       PageMap      -> drawMapPage playerPosL goalPosL
       PageSave     -> drawSlots "SAVE TO:" manualSlotRows
@@ -92,18 +95,24 @@ renderMenu fonts registry tilemap cursor env stats levelIx questDefs qlog = do
         (V4 52 68 100 160) (V4 255 230 120 220)
       drawText fonts textHi 2.0 (V2 (contentX - 18.0) y) ">"
 
-    drawStatus vitalsList = do
+    drawStatus vitalsList statsList = do
       let v = case vitalsList of
                 (x : _) -> x
                 []      -> fullVitals playerMaxHp playerMaxMp playerMaxStamina
+          d = case statsList of
+                (x : _) -> x
+                []      -> baseStats
           line i = drawText fonts textLit 2.0 (row i)
       line 0 (printf "HP      %3.0f / %3.0f" (vHp v) (vMaxHp v))
       line 1 (printf "MP      %3.0f / %3.0f" (vMp v) (vMaxMp v))
       line 2 (printf "STAMINA %3.0f / %3.0f" (vStamina v) (vMaxStamina v))
-      line 4 ("LEVEL   " <> show (levelIx + 1))
-      line 5 ("TIME    " <> formatTime (statTime stats))
-      line 6 ("DEATHS  " <> show (statDeaths stats))
-      line 7 ("ITEMS   " <> show (statItems stats))
+      line 3 (printf "ATK %d   DEF %d   SPD %d%%"
+                (dsAtk d) (dsDef d) (round (dsSpeedMult d * 100.0) :: Int))
+      line 5 ("LEVEL   " <> show (levelIx + 1))
+      line 6 ("TIME    " <> formatTime (statTime stats))
+      line 7 ("DEATHS  " <> show (statDeaths stats))
+      line 8 ("ITEMS   " <> show (statItems stats))
+      line 9 ("KILLS   " <> show (statKills stats))
 
     drawBackpackPage
       | null (meBackpack env) =
@@ -137,6 +146,49 @@ renderMenu fonts registry tilemap cursor env stats levelIx questDefs qlog = do
           Just iid -> drawText fonts textLit 2.0 (V2 (x + 140.0) y)
                         (T.unpack (itemDisplayName registry iid))
           Nothing  -> drawText fonts (V4 70 85 110 255) 2.0 (V2 (x + 140.0) y) "-"
+
+    -- Talent rows come from the 'MenuEnv' (id, rank, buyable); names, costs
+    -- and prerequisites are looked up in the definitions for display.
+    drawTalentsPage
+      | null (meTalents env) =
+          centeredIn 260.0 textDim 2.5 "NO TALENTS DEFINED"
+      | otherwise = do
+          drawText fonts textHi 2.0 (V2 contentX (contentY - 34.0))
+            ("POINTS: " <> show (meTalentPts env))
+          forM_ (zip [0 :: Int ..] (meTalents env)) $ \(i, (tid, rank, buyable)) -> do
+            cursorAt i PageTalents
+            let V2 x y = row i
+                mDef = defFor tid
+                nameStr = maybe (rawTalent tid) (T.unpack . tdName) mDef
+                maxRank = maybe 1 tdMaxRank mDef
+                cost = maybe 1 tdCost mDef
+                rankColor
+                  | rank >= maxRank = V4 120 255 190 255
+                  | buyable         = textHi
+                  | otherwise       = textDim
+            drawText fonts (if rank > 0 then textLit else textDim) 2.0 (V2 x y)
+              nameStr
+            drawText fonts rankColor 2.0 (V2 (x + 300.0) y)
+              (show rank <> "/" <> show maxRank)
+            drawText fonts textDim 2.0 (V2 (x + 400.0) y)
+              ("COST " <> show cost)
+            when (rank >= maxRank) $
+              drawText fonts (V4 120 255 190 255) 2.0 (V2 (x + 520.0) y) "MAX"
+          -- Description + prerequisite of the selected node.
+          case drop (mcRow cursor) (meTalents env) of
+            ((tid, _, _) : _) | Just def <- defFor tid -> do
+              drawText fonts textDim 1.5 (V2 contentX 490.0) (T.unpack (tdDesc def))
+              forM_ (tdRequires def) $ \(TalentId parent, need) ->
+                drawText fonts textDim 1.5 (V2 contentX 506.0)
+                  ("REQUIRES " <> maybe (T.unpack parent) (T.unpack . tdName)
+                                    (defFor (TalentId parent))
+                   <> " " <> show need)
+            _ -> return ()
+      where
+        defFor tid = case [ d | d <- talentDefs, tdId d == tid ] of
+          (d : _) -> Just d
+          []      -> Nothing
+        rawTalent (TalentId raw) = T.unpack raw
 
     drawQuestsPage
       | null questDefs = centeredIn 260.0 textDim 2.5 "NO QUESTS"

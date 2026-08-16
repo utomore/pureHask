@@ -1,0 +1,42 @@
+;; 音訊表:音效綁事件、音樂綁模式/關卡。寫法見 docs/DSL_GUIDE.md §11。
+;;
+;; 事件名(固定詞彙,綁錯啟動失敗):
+;;   player-died goal-reached item-picked item-used equip-changed
+;;   talked-to enemy-killed talent-learned talents-respec
+;; 模式名:title playing menu dialogue dead level-complete ending
+;;   ——沒綁的模式「維持現在的音樂」(所以開選單不會重播關卡曲)。
+;; 檔案路徑相對於 assets/audio/;支援 WAV(其他格式視 SDL_mixer 而定)。
+;; 目前的 wav 全是佔位合成音,直接覆蓋同名檔即可換音(熱重載)。
+
+;; ---- 音效 ----
+(sfx pickup (file sfx/pickup.wav) (volume 96))
+(sfx potion (file sfx/potion.wav) (volume 96))
+(sfx death  (file sfx/death.wav)  (volume 104))
+(sfx hit    (file sfx/hit.wav)    (volume 88))
+(sfx talk   (file sfx/talk.wav)   (volume 72))
+(sfx equip  (file sfx/equip.wav)  (volume 80))
+(sfx goal   (file sfx/goal.wav)   (volume 104))
+(sfx talent (file sfx/talent.wav) (volume 96))
+(sfx respec (file sfx/respec.wav) (volume 96))
+
+;; ---- 事件 → 音效 ----
+(on-event item-picked    pickup)
+(on-event item-used      potion)
+(on-event player-died    death)
+(on-event enemy-killed   hit)
+(on-event talked-to      talk)
+(on-event equip-changed  equip)
+(on-event goal-reached   goal)
+(on-event talent-learned talent)
+(on-event talents-respec respec)
+
+;; ---- 音樂 ----
+(music title-theme (file music/title.wav)     (volume 56))
+(music overworld   (file music/overworld.wav) (volume 44))
+(music cave        (file music/cave.wav)      (volume 48))
+
+;; ---- 模式/關卡 → 音樂 ----
+(music-for-mode title   title-theme)
+(music-for-mode playing overworld)
+(music-for-mode ending  title-theme)
+(music-for-level 03-hollow cave)

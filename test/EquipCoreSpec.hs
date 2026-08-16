@@ -57,14 +57,34 @@ spec = do
       unequipSlot SlotHead M.empty M.empty `shouldBe` (M.empty, M.empty)
 
   describe "computeStats" $ do
-    it "starts from the base line" $
-      computeStats testRegistry M.empty `shouldBe` baseStats
+    it "starts from the given base line" $
+      computeStats testRegistry baseStats M.empty `shouldBe` baseStats
 
     it "sums stats over all equipped gear" $ do
       let eq = M.fromList [ (SlotWeapon, ItemId "sword-b")
                           , (SlotShoes, ItemId "boots")
                           ]
-          ds = computeStats testRegistry eq
+          ds = computeStats testRegistry baseStats eq
       dsAtk ds `shouldBe` 9
       dsDef ds `shouldBe` 1
       dsSpeedMult ds `shouldBe` 1.15
+
+    it "stacks gear on top of a talent bonus base" $ do
+      let talentBase = baseStats { dsAtk = 4, dsMaxHp = 25 }
+          eq = M.fromList [(SlotWeapon, ItemId "sword-a")]
+          ds = computeStats testRegistry talentBase eq
+      dsAtk ds `shouldBe` 9
+      dsMaxHp ds `shouldBe` 25
+
+  describe "applyMaxima" $ do
+    it "raises the maxima by the stat bonuses" $ do
+      let v = applyMaxima baseStats { dsMaxHp = 50, dsMaxStamina = 20 }
+                (fullVitals 100 50 100)
+      vMaxHp v `shouldBe` 150
+      vMaxStamina v `shouldBe` 120
+
+    it "clamps current values when the maxima shrink" $ do
+      let v0 = (fullVitals 100 50 100) { vHp = 140, vMaxHp = 150 }
+          v = applyMaxima baseStats v0
+      vMaxHp v `shouldBe` 100
+      vHp v `shouldBe` 100

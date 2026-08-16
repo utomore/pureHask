@@ -1,0 +1,13 @@
+;; 玩家 sprite sheet(佔位美術:96x48 BMP,24x24 網格,洋紅色去背)。
+;; 換上正式美術:直接覆蓋 assets/textures/player.bmp(格子大小一致即可),
+;; 或改這裡的 frame-size / anim 列。存檔即熱重載。
+;; 動畫名的選用順序見 Sprite.Core.playerAnimPrefs:
+;;   dash/attack/charge/thrust/plunge/hook/jump/run/idle——
+;;   沒有的名字會自動退回下一個,最少只要一列 idle 就能動。
+
+(sprite player
+  (sheet player.bmp)
+  (frame-size 24 24)
+  (color-key 255 0 255)
+  (anim idle (row 0) (frames 2) (fps 3))
+  (anim run  (row 1) (frames 4) (fps 10)))

@@ -26,7 +26,10 @@ import Npc.Core (NpcAi(..))
 import Npc.Script (NpcDef(..))
 import Render.Font (FontSet(..), drawText, textWidth)
 import Render.Layers (renderLayerSlots)
+import Render.Sprites (SpriteTextures, drawSprite)
 import Sim.ParticleCore (Particle(..))
+import Sprite.Core (playerAnimPrefs, movementAnimPrefs)
+import Sprite.Script (SpriteDef)
 import World.Scene (SceneDef, backSlots, frontSlots)
 import World.Tilemap
 
@@ -45,9 +48,17 @@ cameraOffset tilemap (V2 px py) = V2 camX camY
 
 -- | Draw the full game scene: back parallax layers, tiles, entities, VFX,
 --   player, then the front parallax layers (see "World.Scene").
+--
+--   Entities with a sprite sheet (naming convention: @player@, @npc-ID@,
+--   @enemy-ID@ in @assets/sprites/@) are drawn animated; everything else
+--   keeps its coloured rectangle, so art can land one sheet at a time.
+--   @animClock@ is the render clock in seconds — animation is presentation,
+--   so it ticks with wall time, not with the fixed simulation step.
 renderScene :: FontSet -> ItemRegistry -> M.Map NpcId NpcDef
-            -> M.Map EnemyId EnemyDef -> Tilemap -> SceneDef -> Game ()
-renderScene fonts registry npcDefs enemyDefs tilemap scene = do
+            -> M.Map EnemyId EnemyDef -> M.Map T.Text SpriteDef
+            -> SpriteTextures -> Double -> Tilemap -> SceneDef -> Game ()
+renderScene fonts registry npcDefs enemyDefs spriteDefs spriteTexs animClock
+            tilemap scene = do
   let renderer = fsRenderer fonts
   -- Camera follows the player.
   playerPositions <- cfold (\acc (Player, Position p) -> p : acc) []
@@ -156,16 +167,22 @@ renderScene fonts registry npcDefs enemyDefs tilemap scene = do
     SDL.rendererDrawColor renderer $= V4 (chan r) (chan g) (chan b) alpha
     SDL.fillRect renderer (Just rect)
 
-  -- NPCs: body, name, chatter bubble, and an E hint when the player is close.
-  cfoldM_ (\_ (Npc nid, NpcBrain ai, Position pos, Collider size) -> do
+  -- NPCs: body (sprite when one exists), name, chatter bubble, and an E hint
+  -- when the player is close.
+  cfoldM_ (\_ (Npc nid, NpcBrain ai, Position pos, Collider size, Velocity (V2 vx _)) -> do
     let relativePos = pos - camOffset
         rect = toSDLRect relativePos size
         (r, g, b) = maybe (200, 180, 120) ndColor (M.lookup nid npcDefs)
         chan = fromIntegral . max 0 . min (255 :: Int)
-    SDL.rendererDrawColor renderer $= V4 (chan r) (chan g) (chan b) 255
-    SDL.fillRect renderer (Just rect)
-    SDL.rendererDrawColor renderer $= V4 (chan (r + 50)) (chan (g + 50)) (chan (b + 50)) 255
-    SDL.drawRect renderer (Just rect)
+        NpcId rawNid = nid
+    drawn <- liftIO $ drawSprite renderer spriteDefs spriteTexs
+      ("npc-" <> rawNid) (movementAnimPrefs (abs vx > 1.0)) animClock
+      relativePos size (vx < -1.0)
+    when (not drawn) $ do
+      SDL.rendererDrawColor renderer $= V4 (chan r) (chan g) (chan b) 255
+      SDL.fillRect renderer (Just rect)
+      SDL.rendererDrawColor renderer $= V4 (chan (r + 50)) (chan (g + 50)) (chan (b + 50)) 255
+      SDL.drawRect renderer (Just rect)
 
     -- Name tag.
     forM_ (M.lookup nid npcDefs) $ \def -> do
@@ -200,16 +217,22 @@ renderScene fonts registry npcDefs enemyDefs tilemap scene = do
           (V2 (rx + w / 2.0 - 4.0) (ry - 26.0)) "E"
     ) ()
 
-  -- Enemies: body in their definition colour, hp bar above when damaged.
-  cfoldM_ (\_ (Enemy eid, Position pos, Collider size, EnemyHp hp) -> do
+  -- Enemies: body in their definition colour (sprite when one exists), hp
+  -- bar above when damaged.
+  cfoldM_ (\_ (Enemy eid, Position pos, Collider size, EnemyHp hp, Velocity (V2 vx _)) -> do
     let relativePos = pos - camOffset
         rect = toSDLRect relativePos size
         (r, g, b) = maybe (200, 80, 80) edColor (M.lookup eid enemyDefs)
         chan = fromIntegral . max 0 . min (255 :: Int)
-    SDL.rendererDrawColor renderer $= V4 (chan r) (chan g) (chan b) 255
-    SDL.fillRect renderer (Just rect)
-    SDL.rendererDrawColor renderer $= V4 (chan (r + 60)) (chan (g + 60)) (chan (b + 60)) 255
-    SDL.drawRect renderer (Just rect)
+        EnemyId rawEid = eid
+    drawn <- liftIO $ drawSprite renderer spriteDefs spriteTexs
+      ("enemy-" <> rawEid) (movementAnimPrefs (abs vx > 1.0)) animClock
+      relativePos size (vx < -1.0)
+    when (not drawn) $ do
+      SDL.rendererDrawColor renderer $= V4 (chan r) (chan g) (chan b) 255
+      SDL.fillRect renderer (Just rect)
+      SDL.rendererDrawColor renderer $= V4 (chan (r + 60)) (chan (g + 60)) (chan (b + 60)) 255
+      SDL.drawRect renderer (Just rect)
 
     forM_ (M.lookup eid enemyDefs) $ \def ->
       when (hp < edHp def) $ do
@@ -249,8 +272,10 @@ renderScene fonts registry npcDefs enemyDefs tilemap scene = do
         SDL.fillRect renderer (Just tipRect)
     ) ()
 
-  -- Player.
-  cfoldM_ (\_ (Player, Position pos, Collider size, cstate :: CombatState, Facing dir) -> do
+  -- Player: sprite sheet when one named "player" exists, coloured rectangle
+  -- otherwise.
+  cfoldM_ (\_ (Player, Position pos, Collider size, cstate :: CombatState,
+               Facing dir, Velocity (V2 vx _)) -> do
     let relativePos = pos - camOffset
         V2 pw ph = size
 
@@ -262,33 +287,39 @@ renderScene fonts registry npcDefs enemyDefs tilemap scene = do
         drawnRect = toSDLRect drawnPos drawnSize
         V2 dpw dph = drawnSize
 
-        (bodyFill, bodyBorder) = case cstate of
-          StateDashing _     -> (V4 220 240 255 255, V4 255 255 255 255)
-          StateDashJump      -> (V4 160 235 255 255, V4 255 255 255 255)
-          StateThrust _      -> (V4 255 200 0 255,   V4 255 255 100 255)
-          StatePlunge        -> (V4 200 220 255 255, V4 255 255 255 255)
-          StateHookHanging _ -> (V4 0 255 170 255,   V4 100 255 220 255)
-          StateCharging t
-            | t >= chargeThreshold -> (V4 0 220 220 255, V4 255 220 0 255)
-          _                  -> (V4 0 220 220 255,   V4 100 255 255 255)
+    drawn <- liftIO $ drawSprite renderer spriteDefs spriteTexs
+      "player" (playerAnimPrefs cstate (abs vx > 1.0)) animClock
+      drawnPos drawnSize (dir == DirLeft)
 
-    SDL.rendererDrawColor renderer $= bodyFill
-    SDL.fillRect renderer (Just drawnRect)
-    SDL.rendererDrawColor renderer $= bodyBorder
-    SDL.drawRect renderer (Just drawnRect)
+    when (not drawn) $ do
+      let (bodyFill, bodyBorder) = case cstate of
+            StateDashing _     -> (V4 220 240 255 255, V4 255 255 255 255)
+            StateDashJump      -> (V4 160 235 255 255, V4 255 255 255 255)
+            StateThrust _      -> (V4 255 200 0 255,   V4 255 255 100 255)
+            StatePlunge        -> (V4 200 220 255 255, V4 255 255 255 255)
+            StateHookHanging _ -> (V4 0 255 170 255,   V4 100 255 220 255)
+            StateCharging t
+              | t >= chargeThreshold -> (V4 0 220 220 255, V4 255 220 0 255)
+            _                  -> (V4 0 220 220 255,   V4 100 255 255 255)
 
-    -- Fully charged: double border.
+      SDL.rendererDrawColor renderer $= bodyFill
+      SDL.fillRect renderer (Just drawnRect)
+      SDL.rendererDrawColor renderer $= bodyBorder
+      SDL.drawRect renderer (Just drawnRect)
+
+      -- Facing indicator (the sprite shows facing by mirroring instead).
+      let indX = if dir == DirLeft then 2.0 else dpw - 6.0
+          indRect = toSDLRect (drawnPos + V2 indX ((dph - 10.0) / 2.0)) (V2 4.0 10.0)
+      SDL.rendererDrawColor renderer $= V4 255 255 255 255
+      SDL.fillRect renderer (Just indRect)
+
+    -- Fully charged: double border, on sprite or rectangle alike.
     case cstate of
       StateCharging t | t >= chargeThreshold -> do
+        SDL.rendererDrawColor renderer $= V4 255 220 0 255
         let outerRect = toSDLRect (drawnPos - V2 2.0 2.0) (drawnSize + V2 4.0 4.0)
         SDL.drawRect renderer (Just outerRect)
       _ -> return ()
-
-    -- Facing indicator.
-    let indX = if dir == DirLeft then 2.0 else dpw - 6.0
-        indRect = toSDLRect (drawnPos + V2 indX ((dph - 10.0) / 2.0)) (V2 4.0 10.0)
-    SDL.rendererDrawColor renderer $= V4 255 255 255 255
-    SDL.fillRect renderer (Just indRect)
     ) ()
 
   -- The three front parallax layers close the sandwich.

@@ -1,0 +1,59 @@
+;; 天賦樹:三條分支(烈刃/壁壘/疾風),檔案順序 = 選單顯示順序。
+;; 寫法見 docs/DSL_GUIDE.md §10;效果詞彙:
+;;   (atk N) (def N) (spd N) (max-hp N) (max-stamina N)   — 每階疊加一次
+;; (requires 節點 [階數]) 只能引用「檔案中較早定義」的節點(保證無環)。
+;;
+;; 天賦點來源:每 5 殺 +1、每過一關 +1(Core.Config 可調)、
+;; 任務動作 (give-talent-points N)。重洗:對回聲石碑(echo-shrine NPC)
+;; 說話 → (respec-talents) 全額退點。
+
+;; ---- 烈刃(輸出) ----
+
+(talent blade-touch
+  (name talent.blade-touch.name)
+  (desc talent.blade-touch.desc)
+  (max-rank 3)
+  (cost 1)
+  (effect (atk 2)))
+
+(talent blade-edge
+  (name talent.blade-edge.name)
+  (desc talent.blade-edge.desc)
+  (max-rank 2)
+  (cost 2)
+  (requires blade-touch 2)
+  (effect (atk 4)))
+
+;; ---- 壁壘(生存) ----
+
+(talent bulwark-skin
+  (name talent.bulwark-skin.name)
+  (desc talent.bulwark-skin.desc)
+  (max-rank 3)
+  (cost 1)
+  (effect (def 1)))
+
+(talent bulwark-heart
+  (name talent.bulwark-heart.name)
+  (desc talent.bulwark-heart.desc)
+  (max-rank 2)
+  (cost 2)
+  (requires bulwark-skin 2)
+  (effect (max-hp 25)))
+
+;; ---- 疾風(機動) ----
+
+(talent gale-step
+  (name talent.gale-step.name)
+  (desc talent.gale-step.desc)
+  (max-rank 2)
+  (cost 1)
+  (effect (spd 6)))
+
+(talent gale-lungs
+  (name talent.gale-lungs.name)
+  (desc talent.gale-lungs.desc)
+  (max-rank 2)
+  (cost 2)
+  (requires gale-step 1)
+  (effect (max-stamina 20)))

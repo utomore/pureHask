@@ -46,9 +46,10 @@ import Sim.Spawn (PlayerPersist(..))
 --
 --   History: v1 stored the level as a sort-order INDEX (inserting a level
 --   file silently retargeted every old save); v2 stores the level file's
---   base name.
+--   base name. v3 added the talent system: kill stats, talent points/ranks
+--   and the max-HP/stamina bonuses inside the derived block.
 currentSaveVersion :: Int
-currentSaveVersion = 2
+currentSaveVersion = 3
 
 -- | What the codec needs from the running game: the discovered level base
 --   names, in play order.
@@ -91,7 +92,8 @@ encodeSave env sv = A.encode $ A.object
     phaseKey QActive    = "active"
     phaseKey QDone      = "done"
     statsV st = A.object
-      [ "deaths" .= statDeaths st, "items" .= statItems st, "time" .= statTime st ]
+      [ "deaths" .= statDeaths st, "items" .= statItems st
+      , "kills" .= statKills st, "time" .= statTime st ]
     playerV pp = A.object
       [ "backpack" .= M.fromList
           [ (raw, n) | (ItemId raw, n) <- M.toList (ppBackpack pp) ]
@@ -99,6 +101,7 @@ encodeSave env sv = A.encode $ A.object
           [ (slotKey slot, raw) | (slot, ItemId raw) <- M.toList (ppEquipped pp) ]
       , "vitals"   .= vitalsV (ppVitals pp)
       , "derived"  .= derivedV (ppStats pp)
+      , "talents"  .= talentsV (ppTalents pp)
       ]
     vitalsV v = A.object
       [ "hp" .= vHp v, "maxHp" .= vMaxHp v
@@ -106,7 +109,13 @@ encodeSave env sv = A.encode $ A.object
       , "stamina" .= vStamina v, "maxStamina" .= vMaxStamina v
       ]
     derivedV d = A.object
-      [ "atk" .= dsAtk d, "def" .= dsDef d, "speedMult" .= dsSpeedMult d ]
+      [ "atk" .= dsAtk d, "def" .= dsDef d, "speedMult" .= dsSpeedMult d
+      , "maxHp" .= dsMaxHp d, "maxStamina" .= dsMaxStamina d ]
+    talentsV ts = A.object
+      [ "points" .= tsPoints ts
+      , "ranks"  .= M.fromList
+          [ (raw, n) | (TalentId raw, n) <- M.toList (tsRanks ts) ]
+      ]
 
 -- | The clamped level base name for an index (encode side).
 levelNameOf :: SaveEnv -> Int -> String
@@ -124,6 +133,7 @@ levelNameOf (SaveEnv names) ix = case drop ix names of
 migrations :: SaveEnv -> [(Int, A.Object -> A.Parser A.Object)]
 migrations env =
   [ (1, migrate1to2 env)
+  , (2, migrate2to3)
   ]
 
 -- | v1 -> v2: the level was stored as a sort-order index; replace it with
@@ -137,6 +147,24 @@ migrate1to2 (SaveEnv names) o = do
       pure . KM.insert "levelName" (A.toJSON name) . KM.delete "level" $ o
     _ -> fail ("migration v1->v2: level index " <> show (ix :: Int)
                <> " is out of range (have " <> show (length names) <> " levels)")
+
+-- | v2 -> v3 (talent system): zero kills into the stats, an empty talent
+--   block onto the player, and zero max-HP/stamina bonuses into the derived
+--   block. An old save simply starts with no talents.
+migrate2to3 :: A.Object -> A.Parser A.Object
+migrate2to3 o = do
+  stats   <- o .: "stats"   :: A.Parser A.Object
+  player  <- o .: "player"  :: A.Parser A.Object
+  derived <- player .: "derived" :: A.Parser A.Object
+  let stats'   = KM.insert "kills" (A.toJSON (0 :: Int)) stats
+      derived' = KM.insert "maxHp" (A.toJSON (0 :: Int))
+               . KM.insert "maxStamina" (A.toJSON (0 :: Int)) $ derived
+      talents  = A.object [ "points" .= (0 :: Int)
+                          , "ranks" .= (M.empty :: M.Map Text Int) ]
+      player'  = KM.insert "derived" (A.Object derived')
+               . KM.insert "talents" talents $ player
+  pure . KM.insert "stats" (A.Object stats')
+       . KM.insert "player" (A.Object player') $ o
 
 -- | Run every applicable migration step, then bump the version field.
 migrate :: SaveEnv -> Int -> A.Object -> A.Parser A.Object
@@ -171,13 +199,15 @@ decodeSave env bytes = do
           pure (SaveGame currentSaveVersion level stats player quests)
 
     parseStats = A.withObject "stats" $ \o ->
-      RunStats <$> o .: "deaths" <*> o .: "items" <*> o .: "time"
+      RunStats <$> o .: "deaths" <*> o .: "items" <*> o .: "kills"
+               <*> o .: "time"
 
     parsePlayer = A.withObject "player" $ \o -> do
       bpRaw <- o .: "backpack" :: A.Parser (M.Map Text Int)
       eqRaw <- o .: "equipped" :: A.Parser (M.Map Text Text)
       vitals <- o .: "vitals" >>= parseVitals
       derived <- o .: "derived" >>= parseDerived
+      talents <- o .: "talents" >>= parseTalents
       equipped <- M.fromList <$> mapM
         (\(k, v) -> (\slot -> (slot, ItemId v)) <$> parseSlotKey k)
         (M.toList eqRaw)
@@ -186,6 +216,7 @@ decodeSave env bytes = do
         , ppEquipped = equipped
         , ppVitals = vitals
         , ppStats = derived
+        , ppTalents = talents
         }
 
     parseVitals = A.withObject "vitals" $ \o ->
@@ -194,6 +225,15 @@ decodeSave env bytes = do
 
     parseDerived = A.withObject "derived" $ \o ->
       DerivedStats <$> o .: "atk" <*> o .: "def" <*> o .: "speedMult"
+                   <*> o .: "maxHp" <*> o .: "maxStamina"
+
+    parseTalents = A.withObject "talents" $ \o -> do
+      pts <- o .: "points"
+      ranksRaw <- o .: "ranks" :: A.Parser (M.Map Text Int)
+      pure TalentState
+        { tsPoints = pts
+        , tsRanks = M.fromList [ (TalentId k, n) | (k, n) <- M.toList ranksRaw ]
+        }
 
     parseQuests = A.withObject "quests" $ \o -> do
       flags <- o .: "flags"
@@ -239,19 +279,42 @@ parseSlotKey t = case t of
 --   stale between sessions (a quest renamed, an item removed); loading must
 --   handle that EXPLICITLY instead of silently tracking the wrong thing.
 sanitizeSave
-  :: [(QuestId, Int)]  -- ^ known quests with their stage counts
-  -> [ItemId]          -- ^ known item ids
+  :: [(QuestId, Int)]        -- ^ known quests with their stage counts
+  -> [ItemId]                -- ^ known item ids
+  -> [(TalentId, Int, Int)]  -- ^ known talents: (id, max rank, cost per rank)
   -> SaveGame
   -> (SaveGame, [String])
-sanitizeSave knownQuests knownItems sv =
+sanitizeSave knownQuests knownItems knownTalents sv =
   ( sv { svQuests = QuestLog (M.fromList keptQuests) (qlFlags qlog)
-       , svPlayer = player { ppBackpack = keptBackpack, ppEquipped = keptEquipped }
+       , svPlayer = player { ppBackpack = keptBackpack, ppEquipped = keptEquipped
+                           , ppTalents = keptTalents }
        }
-  , questWarns <> bagWarns <> eqWarns
+  , questWarns <> bagWarns <> eqWarns <> talentWarns
   )
   where
     qlog = svQuests sv
     player = svPlayer sv
+
+    -- Ranks in talents that no longer exist refund one point per rank (the
+    -- original cost is unknowable); ranks above the current max refund at
+    -- the talent's cost. Every adjustment is reported.
+    (keptTalents, talentWarns) =
+      let ts0 = ppTalents player
+          step (tid@(TalentId raw), rank) (ranks, refund, warns) =
+            case [ (mr, c) | (kid, mr, c) <- knownTalents, kid == tid ] of
+              [] ->
+                ( ranks, refund + rank
+                , ("save: refunded " <> show rank
+                   <> " point(s) from unknown talent '" <> T.unpack raw <> "'") : warns )
+              ((maxRank, cost) : _)
+                | rank > maxRank ->
+                    ( M.insert tid maxRank ranks
+                    , refund + (rank - maxRank) * cost
+                    , ("save: clamped rank of talent '" <> T.unpack raw <> "'") : warns )
+                | otherwise -> (M.insert tid rank ranks, refund, warns)
+          (ranks', refund', warns') =
+            foldr step (M.empty, 0, []) (M.toList (tsRanks ts0))
+      in (TalentState (tsPoints ts0 + refund') ranks', warns')
 
     (keptQuests, questWarns) = foldr checkQuest ([], []) (M.toList (qlQuests qlog))
     checkQuest (qid@(QuestId raw), prog) (keep, warns) =
